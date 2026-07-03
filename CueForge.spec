@@ -1,7 +1,4 @@
 # -*- mode: python ; coding: utf-8 -*-
-# NOTE: build_exe.py is the canonical build (CI uses it). It regenerates this
-# spec's settings AND copies vendor/ffmpeg + yt-dlp to dist/vendored/, which a
-# plain `pyinstaller CueForge.spec` run skips. Keep both bundle lists in sync.
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 

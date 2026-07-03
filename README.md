@@ -72,9 +72,7 @@ Running from source instead? See [Quick start](#quick-start-from-source) below.
 ## Quick start (from source)
 
 Requires Python 3.13. `ffmpeg` and `yt-dlp` are **not** needed up front —
-CueForge downloads its own copies on first use (resolver order for ffmpeg:
-`CUEFORGE_FFMPEG` env var, download cache, `vendored/` beside the exe,
-`vendor/ffmpeg/` in the repo).
+CueForge downloads its own copies on first use.
 
 ```sh
 python -m venv .venv
@@ -100,57 +98,6 @@ Environment overrides:
 - `CUEFORGE_NO_BROWSER=1` — don't auto-open a browser
 - `CUEFORGE_FFMPEG` — path to an ffmpeg binary
 
-## Tests
-
-```sh
-.venv/Scripts/python.exe -m pytest
-```
-
-Testing is intentionally focused on core logic: the mixer/fades, project model
-and storage, import/dedup, cue traversal, the server state reducer, and the
-self-updater.
-
-## Build the executable
-
-```sh
-.venv/Scripts/python.exe build_exe.py
-```
-
-Output: `dist/CueForge.exe` (a single-file console app that opens the browser
-and prints the URL/PIN/QR). If a `vendor/ffmpeg/ffmpeg.exe` (and/or
-`vendor/yt-dlp/yt-dlp.exe`) is present, it is copied alongside as
-`dist/vendored/` so the packaged app can run offline; otherwise the app
-downloads what it needs on first use.
-
-> **Close any running `CueForge.exe` before building.** PyInstaller cleans the
-> output first; a running instance locks `dist/CueForge.exe` and a partial write
-> can corrupt it. If the exe ever serves `{"web":"no index.html yet"}`, its web
-> assets were lost — rebuild cleanly.
-
-Official releases are built by CI: pushing a `v*` tag runs the tests, builds
-the exe on a Windows runner, and publishes it (with `SHA256SUMS.txt`) as a
-GitHub Release — the same artifact the in-app updater installs.
-
-## Project layout
-
-```
-cueforge/
-  __main__.py        # `python -m cueforge` entrypoint -> launcher
-  launcher.py        # console dashboard, PIN, QR, browser, uvicorn
-  audio_format.py    # sample rate / channels / dB helpers
-  ffmpeg_util.py     # locate/auto-download the ffmpeg binary
-  ytdlp_util.py      # locate/auto-download yt-dlp (YouTube import)
-  update_util.py     # GitHub Releases check + exe self-update
-  engine/            # real-time NumPy mixer (normal/background/audition, panic)
-  project/           # show model, importer, .cueforge storage, traversal
-  server/            # FastAPI app, WebSocket protocol, show controller/reducer
-  web/               # vanilla-JS UI (index.html, css/, js/) — no build step
-scripts/             # make_demo_show.py, make_icons.py
-tests/               # pytest suite (engine, project, server, updater)
-build_exe.py         # PyInstaller build script
-requirements.txt
-```
-
 ## Data location
 
 Per-user data lives under `~/CueForge`:
@@ -162,8 +109,9 @@ Per-user data lives under `~/CueForge`:
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set
-up a dev environment, run the tests, and open a pull request.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev
+environment, project layout, tests, building the executable, and how to open a
+pull request.
 
 If CueForge is useful to you and you'd like to support its development, you can
 [buy me a coffee on Ko-fi](https://ko-fi.com/lesani). ♥

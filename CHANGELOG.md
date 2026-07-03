@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Ko-fi support link in the README and Settings.
 
 ### Changed
-- README reworked for the first public release, with fresh screenshots from the demo show.
+- README reworked for the first public release, with fresh screenshots from the demo show; dev/maintainer docs (tests, exe build, CI, layout) moved to CONTRIBUTING.
 - SPDX license headers on all Python sources; `pyproject.toml` declares runtime dependencies.
 
 ### Fixed
