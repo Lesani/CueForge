@@ -1,0 +1,48 @@
+/* CueForge theme - Graphite & Blue */
+:root {
+  --bg:        #131519;
+  --panel:     #1E232B;
+  --border:    #1E232B;
+  --text:      #E6E8EC;
+  --muted:     #939AA4;
+  --accent:    #4C8DD6;                 /* cursor / playing fill */
+  --play-fill: rgba(76, 141, 214, 0.35);
+  --played:    #4FB477;                 /* green border */
+  --bg-cue:    #9B7FE0;                 /* violet */
+  --go:        #35A85A;
+  --panic:     #DC3D42;
+
+  --mono: "SF Mono", "Segoe UI Mono", "Roboto Mono", Consolas,
+          "Liberation Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overscroll-behavior: none;            /* kill pull-to-refresh + scroll chaining mid-show */
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;                     /* full-screen app, no page scroll */
+  touch-action: manipulation;           /* no double-tap zoom on rapid GO taps */
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Hidden helper */
+[hidden] { display: none !important; }

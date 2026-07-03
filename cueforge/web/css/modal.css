@@ -1,0 +1,183 @@
+/* CueForge shared modal styles: dedup modal (Part C) + the edit-mode library
+   picker popover (Part A). Matches the .overlay/.dialog look in layout.css
+   but namespaced so both sections can share it without collisions. */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  width: min(380px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 60px);
+  max-height: calc(100dvh - 60px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.modal h2 { margin: 0; font-size: 16px; }
+.modal p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.modal p b { color: var(--text); }
+
+.dedup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 260px;
+}
+.dedup-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.dedup-info { min-width: 0; }
+.dedup-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dedup-meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.dedup-empty { color: var(--muted); font-size: 12.5px; }
+
+.modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.clone-row { display: flex; gap: 8px; }
+.clone-row .clone-name {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+/* ---------- Themed confirm/prompt/alert (js/dialogs.js) ---------- */
+.dialog-input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+.btn.danger { border-color: var(--panic); }
+.btn.danger:hover { color: var(--panic); border-color: var(--panic); }
+
+/* ---------- Library picker popover (empty-cell click in edit mode) ---------- */
+.picker-modal {
+  width: min(560px, calc(100vw - 24px));
+  height: min(70dvh, 640px);
+  max-height: calc(100dvh - 24px);
+}
+.picker-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.picker-header h2 { margin: 0; }
+.picker-search { width: 100%; }
+
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.picker-group-head {
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 2px 2px;
+}
+.picker-group-head:first-child { padding-top: 2px; }
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+  flex: 0 0 auto;
+}
+.picker-item:hover { border-color: var(--accent); }
+.picker-item .name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.picker-item .type-badge {
+  font-size: 9.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+.picker-item .type-badge.normal { color: var(--accent); border-color: var(--accent); }
+.picker-item .type-badge.background { color: var(--bg-cue); border-color: var(--bg-cue); }
+.picker-item .type-badge.stop { color: var(--panic); border-color: var(--panic); }
+.picker-item .duration {
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  color: var(--muted);
+  flex: 0 0 auto;
+  min-width: 32px;
+  text-align: right;
+}
+.picker-empty { color: var(--muted); font-size: 12.5px; padding: 10px 2px; }
+
+.picker-footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.picker-newstop {
+  width: 100%;
+  border-color: var(--panic);
+}
+.picker-newstop:hover { color: var(--panic); border-color: var(--panic); }
+
+@media (pointer: coarse) {
+  .picker-item { min-height: 44px; }
+}

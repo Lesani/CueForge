@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cueforge"
+version = "0.1.0"
+description = "Server-side, browser-controlled audio cue system for theater and live productions"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Lesani" }]
+keywords = ["audio", "cue", "theater", "live-production", "sound", "playback"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+]
+# Keep in sync with the runtime section of requirements.txt.
+dependencies = [
+    "numpy>=2.0",
+    "sounddevice>=0.5",
+    "soundfile>=0.12",
+    "soxr>=0.5",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "websockets>=13",
+    "python-multipart>=0.0.9",
+    "qrcode>=7.4",
+    "pillow>=10.0",
+    "psutil>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Lesani/CueForge"
+Repository = "https://github.com/Lesani/CueForge"
+Issues = "https://github.com/Lesani/CueForge/issues"
+
+[tool.setuptools.packages.find]
+include = ["cueforge*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

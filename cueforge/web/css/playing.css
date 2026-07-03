@@ -1,0 +1,574 @@
+/* CueForge Playing section: page row, grid, cells, cursor, control bar */
+
+/* ---------- Banners ---------- */
+.banner {
+  padding: 9px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.banner.device {
+  background: color-mix(in srgb, var(--panic) 22%, var(--panel));
+  border: 1px solid var(--panic);
+  color: var(--text);
+}
+.banner.loading {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  border: 1px solid var(--accent);
+  color: var(--text);
+}
+
+/* ---------- Page-tab row ---------- */
+.pagerow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+}
+.pagetabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.pagetab {
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13.5px;
+}
+.pagetab.active {
+  color: var(--text);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  font-weight: 600;
+}
+.pagetab:active,
+.btn:active {
+  transform: scale(0.97);
+  filter: brightness(1.15);
+}
+.pageactions { display: flex; gap: 8px; }
+
+/* ---------- Grid ---------- */
+.grid {
+  display: grid;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.column {
+  background: color-mix(in srgb, var(--panel) 55%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.col-head .num { color: var(--accent); font-weight: 700; }
+
+/* ---------- Cue cells ---------- */
+.cell {
+  position: relative;
+  min-height: 66px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.05s ease;
+}
+.cell:active:not(.empty) {
+  transform: scale(0.98);
+  filter: brightness(1.12);
+}
+.cell .name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text);
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.cell .name .label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cell .name .sub {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.cell .meta {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--muted);
+  position: relative;
+  z-index: 2;
+  text-align: right;
+  flex: 0 0 auto;
+}
+
+/* Playing: left->right fill by progress. Full-width layer slid in with
+   translateX (compositor-only) -- animating width would relayout per frame. */
+.cell.playing { border-color: var(--accent); }
+.cell.playing .fill {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  transform: translateX(-100%);
+  will-change: transform;
+  background: var(--play-fill);
+  border-right: 2px solid var(--accent);
+  z-index: 1;
+}
+.cell.playing .meta { color: var(--text); font-weight: 700; }
+.cell.playing .meta .live { color: var(--accent); }
+
+/* Played: green border */
+.cell.played { border: 2px solid var(--played); }
+.cell.played .name { color: var(--muted); }
+.cell.played .check { color: var(--played); }
+
+/* Background cue: violet */
+.cell.bgcue {
+  background: color-mix(in srgb, var(--bg-cue) 20%, var(--panel));
+  border: 1px solid var(--bg-cue);
+}
+.cell.bgcue .name .loop { color: var(--bg-cue); font-size: 16px; }
+.cell.bgcue .tag {
+  color: #0c0e11;
+  background: var(--bg-cue);
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+.cell.bgcue .meta { color: var(--text); font-weight: 600; }
+
+/* Stop-cue marker */
+.cell .stopmark { color: var(--panic); font-size: 14px; }
+
+/* Cue type identity for cells that are NOT currently running, so background
+   and stop cues are recognizable before (and after) they play. The left
+   stripe survives the played state's green border (these rules come later,
+   so border-left wins); a running background cue uses .bgcue instead. */
+.cell.bgtype { border-left: 3px solid var(--bg-cue); }
+.cell.bgtype .name .loop { color: var(--bg-cue); font-size: 16px; }
+.cell.bgtype .tag {
+  color: var(--bg-cue);
+  border: 1px solid var(--bg-cue);
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  flex: 0 0 auto;
+}
+.cell.stoptype { border-left: 3px solid var(--panic); }
+.cell.stoptype .meta { color: var(--panic); font-weight: 600; }
+
+/* Long-press standby confirmation flash */
+.cell.standby-flash {
+  animation: standby-pulse 0.35s ease-out;
+}
+@keyframes standby-pulse {
+  0% { box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent); }
+  100% { box-shadow: 0 0 0 2px transparent, 0 0 0 var(--accent); }
+}
+
+/* Empty cell */
+.cell.empty {
+  border: 1px dashed var(--muted);
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  opacity: 0.55;
+  justify-content: center;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: default;
+}
+
+/* State chip */
+.chip {
+  font-size: 9.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+}
+
+/* ---------- Cursor line ---------- */
+.cursor {
+  position: relative;
+  height: 0;
+  margin: -1px 0;
+  z-index: 5;
+}
+.cursor .line {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent), 0 0 2px var(--accent);
+  margin-left: 18px;
+}
+.cursor .chev {
+  position: absolute;
+  left: -2px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--accent);
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -2px;
+  text-shadow: 0 0 6px var(--accent);
+}
+
+/* ---------- Edit mode: page tabs ---------- */
+.pagetab { display: flex; align-items: center; gap: 6px; }
+.pagetab-name { display: inline-flex; align-items: center; }
+.pagetab-name.editing .inline-rename {
+  font: inherit;
+  font-size: 13.5px;
+  width: 110px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--text);
+}
+.tab-del {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.tab-del:hover { color: var(--panic); }
+.pagetabs .addpage { padding: 8px 14px; }
+
+/* ---------- Edit mode: column header ---------- */
+.col-head.edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+.col-head.edit .num { color: var(--accent); font-weight: 700; font-size: 12px; }
+.colname-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+.colname-input:focus { border-color: var(--accent); outline: none; }
+.col-rows {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.rows-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+.rows-btn:hover { border-color: var(--accent); }
+.rows-count { min-width: 14px; text-align: center; }
+.col-del {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.col-del:hover { color: var(--panic); border-color: var(--panic); }
+
+/* ---------- Edit mode: empty cell ---------- */
+.cell.empty.editable {
+  cursor: pointer;
+  opacity: 0.7;
+}
+.cell.empty.editable:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  opacity: 1;
+}
+
+/* ---------- Edit mode: cue cell drag/remove/drop ---------- */
+.cell[draggable="true"] { cursor: grab; }
+.cell[draggable="true"]:active { cursor: grabbing; }
+.cell.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+.cell-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+.cell-remove:hover { color: var(--panic); border-color: var(--panic); }
+
+/* Touch / pen cue-move: dimmed source cell + floating label following finger */
+.cell.touch-dragging {
+  opacity: 0.5;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.touch-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+  pointer-events: none;
+  transform: translate(-50%, -140%);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  max-width: 60vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Bottom control bar ---------- */
+.controlbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.3);
+  flex: 0 0 auto;
+}
+.livestatus {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+}
+/* Big, fixed-width, non-jumping timer -- LEFT anchor, never moves */
+.timer {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 52px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 1px;
+  color: var(--accent);
+  flex: 0 0 auto;
+  text-align: left;
+  white-space: pre;                 /* preserve reserved sign slot */
+}
+.np-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.np-label {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.np-name {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.np-name .play { color: var(--accent); }
+.np-next {
+  font-size: 14.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.np-next .name { color: var(--text); font-weight: 600; }
+
+.go {
+  border: 0;
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 26px;
+  letter-spacing: 2px;
+  color: #06210f;
+  background: var(--go);            /* solid fallback if gradient/color-mix drops */
+  background: linear-gradient(180deg,
+              color-mix(in srgb, var(--go) 82%, #fff), var(--go));
+  padding: 16px 54px;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+              0 6px 18px color-mix(in srgb, var(--go) 45%, transparent);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+.go:active { transform: translateY(1px); }
+.go:disabled { opacity: 0.45; cursor: default; filter: grayscale(0.4); }
+
+.panic-wrap { display: flex; justify-content: flex-end; }
+.panic {
+  border: 0;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: #fff;
+  background: var(--panic);        /* solid fallback if gradient/color-mix drops */
+  background: linear-gradient(180deg,
+              color-mix(in srgb, var(--panic) 82%, #fff), var(--panic));
+  padding: 12px 26px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) inset,
+              0 4px 14px color-mix(in srgb, var(--panic) 45%, transparent);
+}
+.panic:active { transform: translateY(1px); }
+
+/* ============================================================
+   Responsive: phones + tablets (Playing = live remote control)
+   Desktop (>= ~1000px) keeps the 3-column controlbar + 1fr grid.
+   ============================================================ */
+
+/* Touch: let swipes land on whole columns instead of stopping mid-column.
+   Grid columns already have a min width (set in playing.js gridTemplateColumns),
+   so on narrow screens the grid scrolls horizontally by full columns. */
+@media (pointer: coarse) {
+  .grid { scroll-snap-type: x proximity; }
+  .column { scroll-snap-align: start; }
+  /* Comfortable hit targets on touch */
+  .pagetab { min-height: 44px; }
+  .rows-btn, .col-del { width: 26px; height: 26px; }
+  .cell-remove { width: 26px; height: 26px; font-size: 14px; }
+}
+
+/* Page-tab row: scroll page tabs horizontally so many pages don't eat
+   vertical space; keep Edit/Reset reachable (they wrap below if needed). */
+@media (max-width: 720px) {
+  .pagerow { flex-wrap: wrap; gap: 8px; }
+  .pagetabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    min-width: 0;
+    flex: 1 1 auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+  .pagetab { flex: 0 0 auto; }
+  .pageactions { flex: 0 0 auto; }
+}
+
+/* Control bar: reflow to two rows -- livestatus on top (full width),
+   then GO (grows to fill) beside PANIC. */
+@media (max-width: 720px) {
+  .controlbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+  .livestatus {
+    flex: 1 1 100%;           /* full-width row 1, forces GO/PANIC to wrap below */
+    gap: 14px;
+  }
+  .timer { font-size: 32px; letter-spacing: 0.5px; }
+  .np-name { font-size: 18px; }
+  .np-next { font-size: 13px; }
+
+  .go {
+    flex: 1 1 auto;           /* majority of row 2 */
+    min-height: 56px;
+    font-size: 21px;
+    letter-spacing: 1.5px;
+    padding: 14px 20px;
+  }
+  .panic-wrap { flex: 0 0 auto; }
+  .panic { min-height: 56px; padding: 12px 20px; }
+}
+
+/* Very narrow: give the grid a touch more breathing room */
+@media (max-width: 420px) {
+  .grid { gap: 10px; }
+  .column { padding: 8px; }
+}

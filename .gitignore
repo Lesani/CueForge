@@ -18,3 +18,22 @@ node_modules/
 # OS
 .DS_Store
 Thumbs.db
+
+# Bundled ffmpeg binary (kept local; downloaded from gyan.dev if absent)
+vendor/ffmpeg/*.exe
+
+# Bundled yt-dlp binary (kept local; yt-dlp on PATH is the fallback)
+vendor/yt-dlp/*.exe
+
+# CueForge working/runtime files
+*.cueforge
+*_work/
+.cueforge_config.json
+
+# Playwright / browser smoke artifacts
+.playwright-mcp/
+cueforge-*.png
+
+# Local dev launcher (not committed)
+run_dev.bat
+

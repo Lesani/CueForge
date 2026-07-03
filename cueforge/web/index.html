@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>CueForge</title>
+  <!-- PWA / add-to-home-screen: standalone fullscreen removes the browser
+       toolbar entirely on iPad/iPhone (the in-browser fallback uses 100dvh). -->
+  <meta name="theme-color" content="#131519" />
+  <link rel="manifest" href="/static/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="CueForge" />
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png" />
+  <link rel="stylesheet" href="/static/css/theme.css" />
+  <link rel="stylesheet" href="/static/css/layout.css" />
+  <link rel="stylesheet" href="/static/css/playing.css" />
+  <link rel="stylesheet" href="/static/css/library.css" />
+  <link rel="stylesheet" href="/static/css/modal.css" />
+  <link rel="stylesheet" href="/static/css/settings.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- Top bar: section tabs | project name | clients pill.
+         On narrow screens the tab row collapses into a hamburger dropdown. -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <img class="applogo" src="/static/icons/icon-192.png" alt="" />
+        <button class="hamburger" data-menu-toggle type="button"
+                aria-label="Menu" aria-expanded="false">
+          <span></span><span></span><span></span>
+          <span class="update-dot" data-update-badge hidden></span>
+        </button>
+        <span class="current-tab" data-active-tab>Playing</span>
+        <nav class="tabs" data-tabs>
+          <button class="tab active" data-tab="playing" type="button">Playing</button>
+          <button class="tab" data-tab="library" type="button">Library</button>
+          <button class="tab" data-tab="settings" type="button">Settings<span class="update-dot" data-update-badge hidden></span></button>
+        </nav>
+      </div>
+      <div class="project" data-project>Connecting&hellip;</div>
+      <div class="status-right">
+        <span class="pill"><span class="dot"></span><span data-clients>0 clients</span></span>
+      </div>
+    </div>
+
+    <!-- Section container: only one visible at a time (local per-device) -->
+    <section class="section" id="section-playing"></section>
+
+    <section class="section" id="section-library" hidden></section>
+
+    <section class="section" id="section-settings" hidden></section>
+
+  </div>
+
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

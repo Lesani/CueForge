@@ -1,0 +1,16 @@
+# CueForge runtime dependencies
+numpy>=2.0
+sounddevice>=0.5
+soundfile>=0.12
+soxr>=0.5
+fastapi>=0.115
+uvicorn[standard]>=0.30
+websockets>=13
+python-multipart>=0.0.9
+qrcode>=7.4
+pillow>=10.0
+psutil>=6.0  # server console stats
+
+# Dev/test
+pytest>=8.0
+pyinstaller>=6.0  # build CueForge.exe (build_exe.py)

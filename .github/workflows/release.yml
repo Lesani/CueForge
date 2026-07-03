@@ -1,0 +1,64 @@
+# Build CueForge.exe and publish it as a GitHub Release.
+#
+# Trigger: push a version tag, e.g.
+#   git tag v0.2.0 && git push origin v0.2.0
+# The tag must match cueforge.__version__ (and pyproject.toml) or the build
+# fails -- the in-app updater compares that version against the release tag.
+#
+# Assets: CueForge.exe (self-contained; ffmpeg/yt-dlp are downloaded by the
+# app itself on first use) and SHA256SUMS.txt (verified by the in-app updater).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          $pkg = python -c "import cueforge; print(cueforge.__version__)"
+          $toml = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          if ($tag -ne $pkg)  { throw "Tag v$tag does not match cueforge.__version__ ($pkg)" }
+          if ($tag -ne $toml) { throw "Tag v$tag does not match pyproject.toml version ($toml)" }
+
+      - name: Provision ffmpeg (required by the test suite)
+        run: python -c "from cueforge import ffmpeg_util; print(ffmpeg_util.download_ffmpeg())"
+
+      - name: Run tests
+        run: pytest
+
+      - name: Build CueForge.exe
+        run: python build_exe.py
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/CueForge.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  CueForge.exe" | Out-File -Encoding ascii dist/SHA256SUMS.txt
+          Get-Content dist/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/CueForge.exe
+            dist/SHA256SUMS.txt
+          generate_release_notes: true

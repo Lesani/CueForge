@@ -1,0 +1,212 @@
+/* CueForge Settings section: project / output / access / connect cards. */
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  gap: 14px;
+  max-width: 980px;
+}
+
+.settings-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.settings-card h3 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.settings-current {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.settings-actions .btn.primary {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.settings-proj-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.settings-proj-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-proj-item .pname {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-proj-item:hover:not(:disabled) { border-color: var(--accent); }
+.settings-proj-item.current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  cursor: default;
+}
+.settings-proj-item .pbadge {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #0c0e11;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: 700;
+}
+
+.settings-note {
+  font-size: 12px;
+  color: var(--muted);
+  min-height: 1em;
+}
+.settings-note.bad { color: var(--panic); }
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.settings-field label {
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.settings-field select,
+.settings-field input[type="text"],
+.settings-field input[type="number"] {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13.5px;
+}
+.settings-field input[readonly] {
+  color: var(--muted);
+}
+
+.settings-inline {
+  display: flex;
+  gap: 8px;
+}
+.settings-inline input { flex: 1; min-width: 0; }
+
+/* checkbox + label rows (e.g. "Check for updates automatically") */
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.settings-toggle input { accent-color: var(--accent); }
+
+/* "Update available" row: version link next to the label */
+.settings-field label a {
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.settings-status {
+  font-size: 12.5px;
+  font-weight: 600;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.settings-status.ok { color: var(--played); }
+.settings-status.bad { color: var(--panic); }
+
+/* ---------- Connect card ---------- */
+.settings-connect {
+  grid-column: span 1;
+}
+.connect-body {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.connect-info {
+  flex: 1;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.connect-row {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+}
+.connect-row .label {
+  color: var(--muted);
+  min-width: 46px;
+  flex: 0 0 auto;
+}
+.connect-row .val {
+  color: var(--text);
+  font-family: var(--mono);
+  word-break: break-all;
+}
+.connect-qr {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.connect-qr img {
+  width: 140px;
+  height: 140px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px;
+}
+.connect-caption {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  max-width: 150px;
+}
