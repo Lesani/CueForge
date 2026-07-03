@@ -436,6 +436,10 @@ class AudioEngine:
                 stream.close()
             except Exception:
                 pass
+        # Release the soxr resampler now that no callback can run: a live
+        # CSoxr instance at interpreter exit makes nanobind print leak
+        # warnings all over the console during a shutdown/self-update.
+        self._resampler = None
 
     def _open_stream(self) -> None:
         import sounddevice as sd

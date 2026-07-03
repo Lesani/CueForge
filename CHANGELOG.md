@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - SPDX license headers on all Python sources; `pyproject.toml` declares runtime dependencies.
 
 ### Fixed
+- Self-update restart: the old process hung waiting for open WebSockets, and the spawned replacement inherited the PyInstaller bootloader environment and died silently; both fixed, shutdown is clean (no traceback/leak spam) and the new version starts reliably.
+- Console dashboard now shows the running app version.
 - Background and stop cues are now visually distinct before playback (violet stripe + `bg` tag, red stripe for stops).
 - Security hardening: project names and audio hashes are validated before any filesystem path is built (path-traversal), `.cueforge` extraction is capped and filtered (zip-bomb), the updater refuses unverified downloads, PIN comparison is constant-time, FLAC imports write atomically, and the mixer silences NaN/inf samples.
 

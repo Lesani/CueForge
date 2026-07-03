@@ -25,7 +25,7 @@ import secrets
 import sys
 import webbrowser
 
-from cueforge import ffmpeg_util, update_util, ytdlp_util
+from cueforge import __version__, ffmpeg_util, update_util, ytdlp_util
 
 BANNER_WIDTH = 60          # minimum rule width; the layout may be wider
 
@@ -39,7 +39,7 @@ _LOGO = [
     r" \____\__,_|\___|_|  \___/|_|  \__, |\___|",
     r"                               |___/      ",
 ]
-_LOGO_TAGLINE = "audio cue server"
+_LOGO_TAGLINE = f"audio cue server  v{__version__}"
 _COLUMN_GAP = 2
 
 
@@ -373,7 +373,12 @@ def main() -> None:
     # Build the server explicitly (instead of uvicorn.run) so the self-update
     # endpoint can reach it and request a graceful stop via should_exit.
     server = uvicorn.Server(
-        uvicorn.Config(app_module.app, host=host, port=port, log_level="warning")
+        uvicorn.Config(
+            app_module.app, host=host, port=port, log_level="warning",
+            # Backstop for the self-update restart: never wait forever on a
+            # lingering connection once should_exit is requested.
+            timeout_graceful_shutdown=5,
+        )
     )
     app_module.app.state.cf.uvicorn_server = server
     server.run()

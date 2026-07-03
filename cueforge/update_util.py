@@ -332,6 +332,13 @@ def spawn_replacement() -> None:
     exe = _exe_path()
     env = dict(os.environ)
     env["CUEFORGE_NO_BROWSER"] = "1"
+    # CRITICAL for PyInstaller onefile: the bootloader hands its state to
+    # child processes via environment variables (_PYI_*, legacy _MEIPASS2).
+    # If the replacement inherits them, it runs from THIS process's temporary
+    # extraction dir -- which is deleted the moment we exit -- and dies
+    # before ever showing a window. Strip them so it bootstraps itself.
+    for var in [k for k in env if k.startswith("_PYI_")] + ["_MEIPASS2"]:
+        env.pop(var, None)
     kwargs: dict = {}
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE

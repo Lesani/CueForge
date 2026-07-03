@@ -184,6 +184,16 @@ class ConnectionManager:
         for ws in dead:
             self.disconnect(ws)
 
+    async def close_all(self, code: int = 1012) -> None:
+        """Close every client connection (1012 = service restart), so a
+        graceful server shutdown isn't blocked waiting for open sockets."""
+        for ws in list(self.active):
+            try:
+                await ws.close(code=code)
+            except Exception:
+                pass
+            self.disconnect(ws)
+
 
 # --------------------------------------------------------------------------
 # App state container
@@ -199,6 +209,9 @@ class AppState:
         # Set by the launcher (uvicorn.Server); lets the self-update endpoint
         # request a graceful stop of the serving loop.
         self.uvicorn_server = None
+        # The serving event loop, captured at startup so worker threads (the
+        # update installer) can schedule coroutines onto it.
+        self.loop: asyncio.AbstractEventLoop | None = None
 
     def snapshot(self) -> dict:
         return self.controller.build_snapshot(clients=self.manager.count)
@@ -303,6 +316,7 @@ def create_app() -> FastAPI:
                     session = None
             if session is not None:
                 state.controller.set_session(session)
+        state.loop = asyncio.get_running_loop()
         state._status_task = asyncio.create_task(_status_loop())
 
     @app.on_event("shutdown")
@@ -702,9 +716,22 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail="no update available")
 
         def _request_shutdown() -> None:
+            # Runs on the update worker THREAD. A graceful stop waits for every
+            # open connection, and the operator's browser keeps its WebSocket
+            # open (it is busy polling for the restart) -- so close all client
+            # sockets first, then ask the serving loop to exit. The launcher's
+            # timeout_graceful_shutdown is the backstop for anything that still
+            # lingers.
+            if state.loop is not None:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        state.manager.close_all(), state.loop
+                    ).result(timeout=5)
+                except Exception:
+                    pass
             srv = state.uvicorn_server
             if srv is not None:
-                srv.should_exit = True  # graceful stop; launcher restarts us
+                srv.should_exit = True
 
         started = update_util.start_apply(_request_shutdown)
         return {"started": started, **_update_status_payload()}
