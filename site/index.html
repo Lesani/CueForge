@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CueForge — audio cues for the small stage</title>
+  <meta name="description" content="CueForge is a free, open-source audio cue player for amateur theatre, schools, churches and small venues. Run the server on the booth PC, control the show from any browser." />
+  <meta name="theme-color" content="#131519" />
+  <link rel="icon" type="image/png" href="assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="assets/icon-192.png" />
+  <meta property="og:title" content="CueForge — audio cues for the small stage" />
+  <meta property="og:description" content="Free, open-source audio cue playback for amateur and small-scale productions. Big GO button, any browser as the console, one file per show." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://lesani.github.io/CueForge/" />
+  <meta property="og:image" content="https://lesani.github.io/CueForge/assets/screenshot-playing-live.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="#">
+    <img src="assets/icon-192.png" alt="" width="30" height="30" />
+    <span>CueForge</span>
+  </a>
+  <nav class="topnav">
+    <a href="#small-stage">Why</a>
+    <a href="#features">Features</a>
+    <a href="#download">Download</a>
+    <a href="https://github.com/Lesani/CueForge" rel="noopener">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ============================================================ hero -->
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">Open source &middot; AGPL-3.0 &middot; Windows</p>
+      <h1>Press GO.<br />That&rsquo;s the whole job.</h1>
+      <p class="lede">
+        CueForge is a free, open-source <strong>audio cue player for amateur and
+        small-scale productions</strong> — community theatre, dance, school and
+        church events, small venues. Run it on the booth PC; control the show
+        from any browser on the network — laptop, tablet, or phone.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-go" href="https://github.com/Lesani/CueForge/releases/latest" rel="noopener">Download for Windows</a>
+        <a class="btn btn-ghost" href="https://github.com/Lesani/CueForge" rel="noopener">View on GitHub</a>
+      </div>
+      <p class="cta-note">One <code>CueForge.exe</code>, no install. Prints a URL, PIN and QR code, and opens the console in your browser.</p>
+    </div>
+
+    <!-- signature: a working miniature of the playing view -->
+    <div class="demo" id="demo" aria-label="Interactive demo of the CueForge playing grid">
+      <div class="demo-head">
+        <span class="demo-tab">Playing</span>
+        <span class="demo-tab dim">Library</span>
+        <span class="demo-tab dim">Settings</span>
+        <span class="demo-page">Act I</span>
+      </div>
+      <div class="demo-grid" id="demoGrid"></div>
+      <div class="demo-bar">
+        <button class="demo-go" id="demoGo" type="button">GO</button>
+        <div class="demo-now">
+          <span class="demo-live" id="demoLive">Ready — GO fires the next cue</span>
+          <span class="demo-timer" id="demoTimer">0:00.0</span>
+        </div>
+      </div>
+      <p class="demo-hint">This grid is live — press GO.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ why -->
+  <section class="band" id="small-stage">
+    <h2>Built for the small stage</h2>
+    <p class="band-lede">
+      Amateur productions run on limited time, borrowed hardware, and crews that
+      change from show to show. So CueForge deliberately does
+      <strong>less</strong> than professional show-control suites — and is
+      learnable in an afternoon, dependable on show night.
+    </p>
+    <div class="pillars">
+      <div class="pillar">
+        <h3><span class="chip chip-go">GO</span> Fire cues, in order, reliably</h3>
+        <p>A grid of buttons and a big GO. No scripting, no MIDI routing
+           matrices, no session concepts. A moving cursor always shows what
+           GO will do next.</p>
+      </div>
+      <div class="pillar">
+        <h3><span class="chip chip-accent">Aa</span> Plain language everywhere</h3>
+        <p>Volume instead of gain staging. &ldquo;Plays as background&rdquo;
+           instead of bus assignments. Fades you drag directly on the
+           waveform.</p>
+      </div>
+      <div class="pillar">
+        <h3><span class="chip chip-violet">.cueforge</span> One file per show</h3>
+        <p>The whole production — cues, audio, layout — is a single file.
+           Carry it on a USB stick, open it on another machine, and it
+           plays.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ console -->
+  <section class="band alt">
+    <div class="split">
+      <div class="split-copy">
+        <h2>Any browser is the console</h2>
+        <p>The booth machine runs the server and produces the audio — it feeds
+           the sound board, so playback is centralized and deterministic. The
+           browsers are just controllers, and several can share one live show
+           at once: the operator on a laptop, the director following along on
+           a phone.</p>
+        <p>Remote devices join with a PIN or by scanning a QR code from the
+           console. On iPad and iPhone, <em>Add to Home Screen</em> gives a
+           true fullscreen control surface, and a wake lock keeps the screen
+           on mid-show.</p>
+      </div>
+      <figure class="shot">
+        <img src="assets/screenshot-playing-live.png" alt="CueForge playing view: a cue running with progress fill, a looping background bed, and stop cues" loading="lazy" />
+        <figcaption>The playing view mid-show — running cue, looping background, stop cues.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================================================ cue model -->
+  <section class="band" id="features">
+    <h2>Cues that read at a glance</h2>
+    <p class="band-lede">Every cue wears its type in the grid, so a glance tells you what GO will do.</p>
+    <div class="cue-legend">
+      <div class="legend-item"><span class="swatch" style="--c:#4C8DD6"></span><div><strong>Normal cues</strong> play one at a time — firing a new one hard-cuts the previous with a declick.</div></div>
+      <div class="legend-item"><span class="swatch" style="--c:#9B7FE0"></span><div><strong>Background cues</strong> loop and stack underneath — rain, crowd noise, a music bed — with fade-in.</div></div>
+      <div class="legend-item"><span class="swatch" style="--c:#DC3D42"></span><div><strong>Stop cues</strong> end a background (or everything), hard or with a timed fade. <strong>PANIC</strong> fast-fades it all.</div></div>
+      <div class="legend-item"><span class="swatch" style="--c:#4FB477"></span><div><strong>Played cues</strong> turn green, so you always know where you are in the show.</div></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ library -->
+  <section class="band alt">
+    <div class="split rev">
+      <div class="split-copy">
+        <h2>A library that takes what you have</h2>
+        <ul class="feature-list">
+          <li>Import audio in <strong>any format</strong> — decoded to 48&nbsp;kHz via ffmpeg, fetched automatically on first use — or straight from YouTube.</li>
+          <li>Trim, gain and fades on a <strong>zoomable waveform editor</strong>, with touch gestures on tablets.</li>
+          <li>Duplicate imports are caught by content hash; groups, filter and sort keep long shows tidy.</li>
+          <li>Audition through the theatre speakers or <strong>on your own device</strong> before the cue goes in the show.</li>
+          <li>Export any cue as WAV, FLAC or MP3 with trim, volume and fades baked in.</li>
+        </ul>
+      </div>
+      <figure class="shot">
+        <img src="assets/screenshot-library.png" alt="CueForge library: waveform editor with fades and trim, grouped items" loading="lazy" />
+        <figcaption>The library — waveform editor with draggable fades, groups, search.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================================================ download -->
+  <section class="band" id="download">
+    <h2>Get CueForge</h2>
+    <div class="dl-grid">
+      <div class="dl-card">
+        <h3>Windows</h3>
+        <p>Grab the prebuilt <code>CueForge.exe</code> — no install, just run
+           it. It keeps itself current with one-click updates.</p>
+        <a class="btn btn-go" href="https://github.com/Lesani/CueForge/releases/latest" rel="noopener">Download latest release</a>
+      </div>
+      <div class="dl-card">
+        <h3>From source</h3>
+        <p>Requires Python 3.13. ffmpeg and yt-dlp are downloaded
+           automatically on first use.</p>
+<pre><code>python -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+.venv/Scripts/python.exe -m cueforge</code></pre>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <p>
+      CueForge is free software under the
+      <a href="https://github.com/Lesani/CueForge/blob/main/LICENSE" rel="noopener">AGPL-3.0-or-later</a>.
+      &copy; 2026 Lesani.
+    </p>
+    <p>
+      Need SMPTE timecode, MIDI, or many-bus routing? Have a look at
+      <a href="https://tdoukinitsas.github.io/liveplay/" rel="noopener">LivePlay</a>,
+      a fellow open-source cue system with a professional feature set.
+    </p>
+    <p>
+      If CueForge is useful to you, you can
+      <a href="https://ko-fi.com/lesani" rel="noopener">buy me a coffee on Ko-fi</a>. &hearts;
+    </p>
+  </div>
+</footer>
+
+<script src="demo.js"></script>
+</body>
+</html>

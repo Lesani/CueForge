@@ -12,10 +12,14 @@ import { confirmDialog, promptDialog } from "./dialogs.js";
 
 const LOOP_ICON = "↻";   // ↻
 const STOP_ICON = "⊘";   // ⊘
+const FADE_ICON = "⇘";   // ⇘
 const CHEV = "∨∨";  // ∨∨
 const PLAY_TRI = "▶";    // ▶
 const NEXT_TRI = "▸";    // ▸
 const CHECK = "✓";       // ✓
+const CHAIN_WITH = "+";  // withPrevious: starts together with previous
+const CHAIN_AFTER = "→"; // afterPrevious: starts after previous ends
+const ROUTE_ICON = "⇥";  // placement has an Output override (routing glyph)
 
 // Marker prefix for our own internal drag payload (native HTML5 DnD), so a
 // dropped placement can be told apart from an OS file drop on the same
@@ -44,6 +48,12 @@ let lastNp = { name: "", next: "" };
 // every renderGrid so the rAF/snapshot path can tick them without re-rendering.
 let bgMetaEls = new Map();
 let bgMetaText = new Map();   // last text written, to skip no-op writes
+
+// Armed-cell (pending chain fire) countdown badges: placementId -> .armed-badge
+// element, rebuilt on every renderGrid alongside bgMetaEls for the same reason
+// (the sig only includes the armed *set*, not the ticking remainingMs).
+let armedMetaEls = new Map();
+let armedMetaText = new Map();
 
 // Auto-scroll the standby cursor into view only when its position actually
 // changed (page + standby placement id), not on unrelated re-renders.
@@ -88,6 +98,7 @@ export function mount(sectionEl) {
       </div>
       <button class="go" data-go type="button">GO</button>
       <div class="panic-wrap">
+        <button class="btn pause" data-pause type="button">Pause</button>
         <button class="panic" data-panic type="button">PANIC</button>
       </div>
     </div>`;
@@ -105,6 +116,7 @@ export function mount(sectionEl) {
     npnext: sectionEl.querySelector("[data-npnext]"),
     go: sectionEl.querySelector("[data-go]"),
     panic: sectionEl.querySelector("[data-panic]"),
+    pause: sectionEl.querySelector("[data-pause]"),
     // per-frame targets, refreshed after each grid render:
     fill: null,
     live: null,
@@ -123,6 +135,7 @@ export function mount(sectionEl) {
 function wireControls() {
   els.go.addEventListener("click", () => send("go"));
   els.panic.addEventListener("click", () => send("panic"));
+  els.pause.addEventListener("click", () => send(store.paused() ? "resume" : "pause"));
   els.reset.addEventListener("click", async () => {
     if (await confirmDialog("Reset all pages to the top and stop everything?", { danger: true })) {
       send("reset");
@@ -332,7 +345,8 @@ function clearDropTarget() {
 }
 
 function wireEditModeDnd(grid) {
-  // Click delegation: remove-placement "x", empty-cell -> library picker.
+  // Click delegation: remove-placement "x", empty-cell -> library picker,
+  // filled cell -> trigger-mode/pre-wait popover.
   grid.addEventListener("click", (e) => {
     const rt = store.runtime();
     if (!rt || !rt.editMode) return;
@@ -353,6 +367,13 @@ function wireEditModeDnd(grid) {
         column: emptyCell.dataset.col,
         row: parseInt(emptyCell.dataset.row, 10),
       });
+      return;
+    }
+
+    const filled = e.target.closest(".cell[data-pid]");
+    if (filled && !e.target.closest("[data-remove]")) {
+      const p = store.placement(filled.dataset.pid);
+      if (p) openPlacementPopover(filled, p);
     }
   });
 
@@ -454,6 +475,8 @@ async function handleFileDrop(page, col, row, files) {
 function pickerRowHTML(it) {
   const dur = it.type === "stop"
     ? "STOP"
+    : it.type === "fade"
+    ? "FADE"
     : (itemDuration(it) != null ? formatClock(itemDuration(it)) : "--:--");
   return `
     <button type="button" class="picker-item" data-pick="${esc(it.id)}">
@@ -520,6 +543,7 @@ function openLibraryPicker(target) {
       <div class="picker-list" data-picker-list></div>
       <div class="picker-footer">
         <button type="button" class="btn picker-newstop" data-newstop>+ New stop cue here</button>
+        <button type="button" class="btn picker-newfade" data-newfade>+ New fade cue here</button>
       </div>
       <div class="modal-actions">
         <button class="btn" type="button" data-cancel>Cancel</button>
@@ -558,6 +582,10 @@ function openLibraryPicker(target) {
     send("createStopCue", { page: target.page, column: target.column, row: target.row });
     close();
   });
+  overlay.querySelector("[data-newfade]").addEventListener("click", () => {
+    send("createFadeCue", { page: target.page, column: target.column, row: target.row });
+    close();
+  });
   overlay.querySelector("[data-cancel]").addEventListener("click", close);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
 
@@ -566,6 +594,156 @@ function openLibraryPicker(target) {
   if (window.matchMedia && window.matchMedia("(pointer: fine)").matches) {
     searchInput.focus();
   }
+}
+
+// ---------------------------------------------------------------- placement popover
+
+// The placement immediately before `p` in its page's runtime sequence (the
+// server's column-major fire order) -- null if `p` is first or off-sequence.
+// Reuses the same rt.sequence the server already computes and store.js
+// already exposes for playedSet()/standbyPlacementId(), rather than
+// re-deriving column-major order here.
+function predecessorOf(p) {
+  const rt = store.runtime();
+  if (!rt || !Array.isArray(rt.sequence)) return null;
+  const idx = rt.sequence.indexOf(p.id);
+  if (idx <= 0) return null;
+  return store.placement(rt.sequence[idx - 1]);
+}
+
+// afterPrevious has no defined start when the predecessor loops (its End is
+// undefined) -- mirrors the server-side rule in update_placement.
+function predecessorLoops(p) {
+  const prev = predecessorOf(p);
+  if (!prev) return false;
+  const item = store.libraryItem(prev.libraryItemId);
+  return !!(item && item.loop);
+}
+
+const TRIGGER_MODES = [
+  { value: "onTrigger", label: "On GO" },
+  { value: "withPrevious", label: "With previous" },
+  { value: "afterPrevious", label: "After previous" },
+];
+
+// Edit-mode popover on a filled cell: trigger mode + pre-wait, opened by the
+// click delegation in wireEditModeDnd(). Same overlay lifecycle as
+// openLibraryPicker() (Escape / click-outside dismiss), but the inner panel is
+// anchored near the cell instead of centered.
+function openPlacementPopover(cellEl, placement) {
+  const disableAfter = predecessorLoops(placement);
+  const mode = placement.triggerMode || "onTrigger";
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay popover-overlay";
+  overlay.innerHTML = `
+    <div class="placement-popover">
+      <div class="seg" data-seg>
+        ${TRIGGER_MODES.map((m) => {
+          const disabled = m.value === "afterPrevious" && disableAfter;
+          return `<button type="button" class="seg-btn${m.value === mode ? " active" : ""}"
+            data-mode="${m.value}"${disabled ? " disabled" : ""}>${esc(m.label)}</button>`;
+        }).join("")}
+      </div>
+      <label class="popover-field">
+        <span>Pre-Wait (s)</span>
+        <input type="number" min="0" step="0.1" data-prewait value="${esc(String(placement.preWait || 0))}" />
+      </label>
+      <label class="popover-field">
+        <span>Output</span>
+        <select data-output>${outputOverrideOptions(placement.outputId)}</select>
+      </label>
+      <button type="button" class="btn" data-edit-lib>Edit in Library...</button>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const panel = overlay.querySelector(".placement-popover");
+  positionPopover(panel, cellEl.getBoundingClientRect());
+
+  function close() {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+  }
+  function onKey(e) {
+    if (e.key === "Escape") close();
+  }
+  document.addEventListener("keydown", onKey);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  function currentPreWait() {
+    return Math.max(0, Number(overlay.querySelector("[data-prewait]").value) || 0);
+  }
+  function currentMode() {
+    const active = overlay.querySelector(".seg-btn.active");
+    return active ? active.dataset.mode : mode;
+  }
+  function currentOutputId() {
+    return overlay.querySelector("[data-output]").value || null;
+  }
+  function commit(fields) {
+    send("updatePlacement", { placementId: placement.id, fields });
+    close();
+  }
+
+  overlay.querySelectorAll("[data-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      commit({ triggerMode: btn.dataset.mode, preWait: currentPreWait(), outputId: currentOutputId() });
+    });
+  });
+
+  overlay.querySelector("[data-prewait]").addEventListener("change", () => {
+    commit({ triggerMode: currentMode(), preWait: currentPreWait(), outputId: currentOutputId() });
+  });
+
+  overlay.querySelector("[data-output]").addEventListener("change", () => {
+    commit({ triggerMode: currentMode(), preWait: currentPreWait(), outputId: currentOutputId() });
+  });
+
+  overlay.querySelector("[data-edit-lib]").addEventListener("click", () => {
+    close();
+    window.dispatchEvent(new CustomEvent("cueforge:editLibraryItem", {
+      detail: { libraryItemId: placement.libraryItemId },
+    }));
+  });
+}
+
+// The placement popover's Output <select> options: "Inherit (item)" plus one
+// option per named Output (store.outputs()), marked "(unavailable)" when its
+// device isn't currently reachable. A dangling stored id is kept as an option
+// (marked "(missing)") so the popover never silently resets the override.
+function outputOverrideOptions(currentId) {
+  const outputs = store.outputs();
+  const avail = store.outputAvailability();
+  let html = `<option value=""${currentId ? "" : " selected"}>Inherit (item)</option>`;
+  let found = false;
+  for (const o of outputs) {
+    if (o.id === currentId) found = true;
+    const a = avail.get(o.id);
+    const unavailable = a && a.deviceOk === false;
+    const sel = o.id === currentId ? " selected" : "";
+    html += `<option value="${esc(o.id)}"${sel}>${esc(o.name)}${unavailable ? " (unavailable)" : ""}</option>`;
+  }
+  if (currentId && !found) {
+    html += `<option value="${esc(currentId)}" selected>(missing)</option>`;
+  }
+  return html;
+}
+
+// Clamp the popover panel inside the viewport, anchored just below the cell
+// (or above it if there's no room below). Coarse pointers get no hover cue,
+// so this has to land somewhere reachable regardless of scroll position.
+function positionPopover(panel, rect) {
+  const margin = 8;
+  const width = Math.min(300, window.innerWidth - margin * 2);
+  panel.style.width = width + "px";
+  panel.style.left = Math.min(Math.max(margin, rect.left), window.innerWidth - width - margin) + "px";
+  const height = panel.offsetHeight || 180;
+  let top = rect.bottom + margin;
+  if (top + height > window.innerHeight - margin) {
+    top = Math.max(margin, rect.top - height - margin);
+  }
+  panel.style.top = top + "px";
 }
 
 // ---------------------------------------------------------------- snapshot
@@ -578,17 +756,19 @@ function structuralSig(s) {
   let lib = "";
   for (const k in show.library) {
     const it = show.library[k];
-    lib += k + it.name + it.type + it.loop + it.trimIn + it.trimOut + ";";
+    lib += k + it.name + it.type + (it.background ? "1" : "0") + it.loop + it.trimIn + it.trimOut +
+      (it.renderState || "") + (it.audioHash || "") + ";";
   }
   const plc = (show.placements || [])
-    .map((p) => p.id + p.column + p.row).join(",");
+    .map((p) => p.id + p.column + p.row + (p.triggerMode || "") + (p.preWait || 0) + (p.outputId || "")).join(",");
   const pages = (show.pages || []).map((pg) =>
     pg.id + pg.name + "[" + (pg.columns || []).map((c) => c.id + c.name + c.rows).join(",") + "]"
   ).join("|");
+  const armed = (rt.scheduled || []).map((s) => s.placementId).sort().join(",");
   return [
     rt.currentPage, rt.editMode, rt.cursorIndex,
     rt.playing ? rt.playing.placementId : "",
-    bg, plc, lib, pages,
+    bg, plc, lib, pages, armed,
   ].join("|");
 }
 
@@ -614,6 +794,11 @@ function onSnapshot(s) {
     els.edit.classList.toggle("active", !!rt.editMode);
     els.addcol.hidden = !rt.editMode;
   }
+
+  // Pause toggle reflects shared transport state.
+  const isPaused = store.paused();
+  els.pause.classList.toggle("active", isPaused);
+  els.pause.textContent = isPaused ? "Resume" : "Pause";
 
   // GO lock window.
   const lock = rt ? (rt.goLockRemainingMs | 0) : 0;
@@ -667,6 +852,10 @@ function onSnapshot(s) {
   // the cache); here we only update the whole-second text on existing cells.
   updateBackgroundTimes(rt);
 
+  // Tick armed-cell countdowns the same way: the sig includes the armed *set*
+  // (so arm/disarm re-renders), not the ticking remainingMs.
+  updateArmedTimes(rt);
+
   renderNowPlaying(s);
 }
 
@@ -679,6 +868,19 @@ function updateBackgroundTimes(rt) {
     if (bgMetaText.get(bg.placementId) !== txt) {
       el.textContent = txt;
       bgMetaText.set(bg.placementId, txt);
+    }
+  }
+}
+
+function updateArmedTimes(rt) {
+  if (!rt || !Array.isArray(rt.scheduled)) return;
+  for (const s of rt.scheduled) {
+    const el = armedMetaEls.get(s.placementId);
+    if (!el) continue;
+    const txt = (Math.max(0, s.remainingMs) / 1000).toFixed(1) + "s";
+    if (armedMetaText.get(s.placementId) !== txt) {
+      el.textContent = txt;
+      armedMetaText.set(s.placementId, txt);
     }
   }
 }
@@ -779,28 +981,31 @@ function startRenamePage(nameEl, show) {
 function iconHTML(item) {
   if (!item) return "";
   if (item.type === "stop") return `<span class="stopmark">${STOP_ICON}</span>`;
-  if (item.type === "background" && item.loop) {
+  if (item.type === "fade") return `<span class="fademark">${FADE_ICON}</span>`;
+  if (item.background && item.loop) {
     return `<span class="loop">${LOOP_ICON}</span>`;
   }
   return "";
 }
 
-// Cue type identity on the cell itself, so background/stop cues read as such
-// BEFORE they are played (running/played states add their own colors on top).
+// Cue type identity on the cell itself, so background/stop/fade cues read as
+// such BEFORE they are played (running/played states add their own colors on top).
 function typeClass(item) {
   if (!item) return "";
   if (item.type === "stop") return " stoptype";
-  if (item.type === "background") return " bgtype";
+  if (item.type === "fade") return " fadetype";
+  if (item.background) return " bgtype";
   return "";
 }
 
 function typeTagHTML(item) {
-  return item && item.type === "background" ? `<span class="tag">bg</span>` : "";
+  return item && item.background ? `<span class="tag">bg</span>` : "";
 }
 
 function metaText(item) {
   if (!item) return "";
   if (item.type === "stop") return "STOP";
+  if (item.type === "fade") return "FADE";
   const d = itemDuration(item);
   return d != null ? formatClock(d) : "--:--";
 }
@@ -825,6 +1030,7 @@ function renderGrid(s) {
   const standbyPid = store.standbyPlacementId();
   const played = store.playedSet();
   const bgById = store.backgroundsById();
+  const armedById = store.scheduledById();
 
   let html = "";
   for (let ci = 0; ci < cols.length; ci++) {
@@ -867,7 +1073,7 @@ function renderGrid(s) {
       if (showCursor && standbyPid === p.id) {
         html += `<div class="cursor"><span class="chev">${CHEV}</span><div class="line"></div></div>`;
       }
-      html += cellHTML(p, playingPid, bgById, played, col.id, r, editMode);
+      html += cellHTML(p, playingPid, bgById, played, col.id, r, editMode, armedById);
     }
     html += `</div>`;
   }
@@ -886,6 +1092,16 @@ function renderGrid(s) {
     if (meta) {
       bgMetaEls.set(cell.dataset.pid, meta);
       bgMetaText.set(cell.dataset.pid, meta.textContent);
+    }
+  });
+
+  armedMetaEls = new Map();
+  armedMetaText = new Map();
+  grid.querySelectorAll(".cell.armed[data-pid]").forEach((cell) => {
+    const badge = cell.querySelector(".armed-badge");
+    if (badge) {
+      armedMetaEls.set(cell.dataset.pid, badge);
+      armedMetaText.set(cell.dataset.pid, badge.textContent);
     }
   });
 
@@ -908,7 +1124,41 @@ function maybeScrollCursorIntoView(s) {
   if (cur) cur.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
 }
 
-function cellHTML(p, playingPid, bgById, played, colId, row, editMode) {
+// Top-edge marker showing a non-default trigger mode + pre-wait (both run and
+// edit modes). Rendered in every cell variant below.
+function chainMarkHTML(p) {
+  if (!p.triggerMode || p.triggerMode === "onTrigger") return "";
+  const glyph = p.triggerMode === "afterPrevious" ? CHAIN_AFTER : CHAIN_WITH;
+  const wait = p.preWait > 0 ? esc(String(p.preWait)) + "s" : "";
+  return `<span class="chainmark">${glyph}${wait}</span>`;
+}
+
+// Countdown badge for a placement with a pending scheduled (chain) fire.
+function armedBadgeHTML(arm) {
+  if (!arm) return "";
+  const secs = (Math.max(0, arm.remainingMs) / 1000).toFixed(1);
+  return `<span class="armed-badge">${secs}s</span>`;
+}
+
+// Small glyph in the meta row for a placement with an Output override
+// (mirrors the chain-mark's minimal style; kept out of the top corners so it
+// never fights the chain mark or the edit-mode remove button for space).
+function routeMarkHTML(p) {
+  if (!p.outputId) return "";
+  return `<span class="routemark" title="Routed to a named Output">${ROUTE_ICON}</span>`;
+}
+
+// Small "pending" pill for a compound placement whose offline render is not
+// ready yet (never rendered or a stale/in-flight render): the operator sees a
+// not-yet-playable compound before firing it. Firing logic is unchanged --
+// the server refuses an unrendered compound like any audio item without a blob.
+function compoundPendingHTML(item) {
+  if (!item || item.type !== "compound") return "";
+  if (item.renderState === "ready" && item.audioHash) return "";
+  return `<span class="compound-pending" title="Preparing…">pending</span>`;
+}
+
+function cellHTML(p, playingPid, bgById, played, colId, row, editMode, armedById) {
   const item = store.libraryItem(p.libraryItemId);
   const name = item ? item.name : "(missing)";
   const pid = esc(p.id);
@@ -917,12 +1167,19 @@ function cellHTML(p, playingPid, bgById, played, colId, row, editMode) {
   const removeBtn = editMode
     ? `<button type="button" class="cell-remove" data-remove="${pid}" title="Remove from grid">&times;</button>`
     : "";
+  const chainMark = chainMarkHTML(p);
+  const routeMark = routeMarkHTML(p);
+  const pendMark = compoundPendingHTML(item);
+  const arm = armedById ? armedById.get(p.id) : null;
+  const armedCls = arm ? " armed" : "";
+  const armedBadge = armedBadgeHTML(arm);
 
   if (p.id === playingPid) {
-    return `<div class="cell playing" data-pid="${pid}"${posAttrs}${dragAttr}>`
+    return `<div class="cell playing${armedCls}" data-pid="${pid}"${posAttrs}${dragAttr}>`
       + `<div class="fill"></div>`
+      + chainMark
       + `<div class="name"><span class="label">${esc(name)}</span><span class="chip">Playing</span></div>`
-      + `<div class="meta"><span class="live">-0:00</span></div>`
+      + `<div class="meta">${routeMark}${pendMark}${armedBadge}<span class="live">-0:00</span></div>`
       + removeBtn
       + `</div>`;
   }
@@ -931,9 +1188,10 @@ function cellHTML(p, playingPid, bgById, played, colId, row, editMode) {
   if (bg) {
     const loop = bg.loop ? `<span class="loop">${LOOP_ICON}</span>` : "";
     const run = formatClock(framesToSeconds(bg.frame));
-    return `<div class="cell bgcue" data-pid="${pid}"${posAttrs}${dragAttr}>`
+    return `<div class="cell bgcue${armedCls}" data-pid="${pid}"${posAttrs}${dragAttr}>`
+      + chainMark
       + `<div class="name">${loop}<span class="label">${esc(name)}</span><span class="tag">bg</span></div>`
-      + `<div class="meta">${run}</div>`
+      + `<div class="meta">${routeMark}${armedBadge}${run}</div>`
       + removeBtn
       + `</div>`;
   }
@@ -942,16 +1200,18 @@ function cellHTML(p, playingPid, bgById, played, colId, row, editMode) {
   const typeCls = typeClass(item);
   const typeTag = typeTagHTML(item);
   if (played.has(p.id)) {
-    return `<div class="cell played${typeCls}" data-pid="${pid}"${posAttrs}${dragAttr}>`
+    return `<div class="cell played${typeCls}${armedCls}" data-pid="${pid}"${posAttrs}${dragAttr}>`
+      + chainMark
       + `<div class="name"><span class="check">${CHECK}</span>${icon}<span class="label">${esc(name)}</span>${typeTag}</div>`
-      + `<div class="meta">${metaText(item)}</div>`
+      + `<div class="meta">${routeMark}${pendMark}${armedBadge}${metaText(item)}</div>`
       + removeBtn
       + `</div>`;
   }
 
-  return `<div class="cell${typeCls}" data-pid="${pid}"${posAttrs}${dragAttr}>`
+  return `<div class="cell${typeCls}${armedCls}" data-pid="${pid}"${posAttrs}${dragAttr}>`
+    + chainMark
     + `<div class="name">${icon}<span class="label">${esc(name)}</span>${typeTag}</div>`
-    + `<div class="meta">${metaText(item)}</div>`
+    + `<div class="meta">${routeMark}${pendMark}${armedBadge}${metaText(item)}</div>`
     + removeBtn
     + `</div>`;
 }

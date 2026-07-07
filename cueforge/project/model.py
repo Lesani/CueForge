@@ -38,7 +38,11 @@ class LibraryItem:
 
     id: str
     name: str
-    type: str = "normal"  # "normal" | "background" | "stop"
+    type: str = "normal"  # "normal" | "compound" | "stop" | "fade" (meta type, immutable)
+    # Role flag: True = stackable/loopable background layer, False = exclusive
+    # normal channel. Meaningful for type normal|compound only; forced False for
+    # stop|fade. Replaces the old type=="background" (ADR 0006).
+    background: bool = False
     audio_hash: Optional[str] = None
     duration: float = 0.0  # full decoded length in seconds (before trim); 0 for stop cues
     trim_in: float = 0.0
@@ -48,21 +52,32 @@ class LibraryItem:
     fade_out: float = 0.0
     fade_shape: str = "linear"  # "linear" | "equalPower"
     loop: bool = False
+    # Named-output routing: the id of a defined Output (see show.settings.outputs)
+    # this item plays into by default. None = the Default Output (channels 1-2).
+    output_id: Optional[str] = None
     # Flat, UI-only grouping label (no server-side hierarchy); "" = ungrouped.
     group: str = ""
     # stop-cue fields:
     stop_target: str = "allBackgrounds"  # "allBackgrounds" | <library item id>
     stop_mode: str = "hard"  # "hard" | "fade"
     stop_fade_seconds: float = 2.0
-    # reserved for later (forward-compat, not implemented in MVP):
-    auto_continue: object = None
-    pre_wait: float = 0.0
+    # fade-cue fields (fade_shape above doubles as the fade-cue ramp shape):
+    fade_target: str = "allBackgrounds"  # "allBackgrounds" | <library item id>
+    fade_to_db: float = 0.0              # target live gain in dB (replaces current)
+    fade_time_seconds: float = 3.0       # ramp duration, > 0
+    fade_stop_when_done: bool = False
+    # compound-cue fields (type == "compound"):
+    timeline: Optional[dict] = None          # {"tracks":[{id,name,gainDb,mute,clips:[...]}]}
+    render_signature: str = ""               # hash of timeline + source audio hashes at last render
+    render_state: str = ""                   # "" | "pending" | "rendering" | "ready" | "error"
+    render_error: str = ""
 
     def to_dict(self) -> dict:
         return {
             "id": self.id,
             "name": self.name,
             "type": self.type,
+            "background": self.background,
             "audioHash": self.audio_hash,
             "duration": self.duration,
             "trimIn": self.trim_in,
@@ -72,20 +87,39 @@ class LibraryItem:
             "fadeOut": self.fade_out,
             "fadeShape": self.fade_shape,
             "loop": self.loop,
+            "outputId": self.output_id,
             "group": self.group,
             "stopTarget": self.stop_target,
             "stopMode": self.stop_mode,
             "stopFadeSeconds": self.stop_fade_seconds,
-            "autoContinue": self.auto_continue,
-            "preWait": self.pre_wait,
+            "fadeTarget": self.fade_target,
+            "fadeToDb": self.fade_to_db,
+            "fadeTimeSeconds": self.fade_time_seconds,
+            "fadeStopWhenDone": self.fade_stop_when_done,
+            "timeline": self.timeline,
+            "renderSignature": self.render_signature,
+            "renderState": self.render_state,
+            "renderError": self.render_error,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "LibraryItem":
+        # Legacy migration (ADR 0006, tolerant load, no FORMAT_VERSION bump):
+        # the old type=="background" becomes type="normal" with the role flag set.
+        raw_type = d.get("type", "normal")
+        background = bool(d.get("background", False))
+        if raw_type == "background":
+            raw_type = "normal"
+            background = True
+        # The role is meaningless for stop/fade meta types; force it False even
+        # if dirty data carries a stray flag.
+        if raw_type in ("stop", "fade"):
+            background = False
         return cls(
             id=d["id"],
             name=d["name"],
-            type=d.get("type", "normal"),
+            type=raw_type,
+            background=background,
             audio_hash=d.get("audioHash"),
             duration=d.get("duration", 0.0),
             trim_in=d.get("trimIn", 0.0),
@@ -95,13 +129,20 @@ class LibraryItem:
             fade_out=d.get("fadeOut", 0.0),
             fade_shape=d.get("fadeShape", "linear"),
             loop=d.get("loop", False),
+            output_id=d.get("outputId"),
             # Legacy fallback: shows saved before the rename carry "folder".
             group=d.get("group", d.get("folder", "")),
             stop_target=d.get("stopTarget", "allBackgrounds"),
             stop_mode=d.get("stopMode", "hard"),
             stop_fade_seconds=d.get("stopFadeSeconds", 2.0),
-            auto_continue=d.get("autoContinue"),
-            pre_wait=d.get("preWait", 0.0),
+            fade_target=d.get("fadeTarget", "allBackgrounds"),
+            fade_to_db=d.get("fadeToDb", 0.0),
+            fade_time_seconds=d.get("fadeTimeSeconds", 3.0),
+            fade_stop_when_done=d.get("fadeStopWhenDone", False),
+            timeline=d.get("timeline"),
+            render_signature=d.get("renderSignature", ""),
+            render_state=d.get("renderState", ""),
+            render_error=d.get("renderError", ""),
         )
 
 
@@ -114,6 +155,14 @@ class CuePlacement:
     page: str  # page id
     column: str  # column id
     row: int
+    # Sequencing: how this placement starts relative to its predecessor, and a
+    # delay from that trigger to audio start. See CONTEXT.md ("Trigger Mode",
+    # "Pre-Wait", "Chain").
+    trigger_mode: str = "onTrigger"  # "onTrigger" | "withPrevious" | "afterPrevious"
+    pre_wait: float = 0.0            # seconds, >= 0
+    # Named-output override: an Output id that wins over the library item's
+    # default. None inherits the item (which itself may be the Default Output).
+    output_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -122,6 +171,9 @@ class CuePlacement:
             "page": self.page,
             "column": self.column,
             "row": self.row,
+            "triggerMode": self.trigger_mode,
+            "preWait": self.pre_wait,
+            "outputId": self.output_id,
         }
 
     @classmethod
@@ -132,6 +184,9 @@ class CuePlacement:
             page=d["page"],
             column=d["column"],
             row=d["row"],
+            trigger_mode=d.get("triggerMode", "onTrigger"),
+            pre_wait=d.get("preWait", 0.0),
+            output_id=d.get("outputId"),
         )
 
 
@@ -267,6 +322,8 @@ def make_placement(
     column: str,
     row: int,
     *,
+    trigger_mode: str = "onTrigger",
+    pre_wait: float = 0.0,
     id_factory: IdFactory = new_id,
 ) -> CuePlacement:
     """Create a CuePlacement with a generated id."""
@@ -276,6 +333,8 @@ def make_placement(
         page=page,
         column=column,
         row=row,
+        trigger_mode=trigger_mode,
+        pre_wait=pre_wait,
     )
 
 

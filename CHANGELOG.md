@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2026-07-07]
+
+### Added
+- Cue sequencing: trigger modes (on GO / with previous / after previous), pre-wait delays, sample-accurate chains, and global Pause/Resume.
+- Fade cues: chainable control cues that fade one item or all backgrounds, hard or timed, with Smooth/Straight curves.
+- Named audio Outputs: route cues to multiple devices, stereo pairs, or mono splits, with per-cue and per-placement overrides and an identification Test tone.
+- Multichannel engine: the mix bus follows the device's channel count (up to 32) instead of fixed stereo.
+- Compound cues: assemble sounds on a multi-track timeline (clips with trim, gain, fades; per-track gain/mute) with preview playback, undo, and automatic background render — the result plays, chains, and exports like any ordinary cue.
+- Project website: https://lesani.github.io/CueForge/ with a live cue-grid demo.
+
+### Changed
+- "Plays as background" is now a role on any sound or compound cue instead of a separate cue type; cue role UI and fade visuals reworked (fade handles on both waveforms, envelope-scaled display).
+- Live gain: volume edits ramp running cues smoothly, and the master volume setting is now actually applied.
+- Settings: Output sections merged into one "Audio outputs" card with a pinned Default row.
+- Timeline editor drag model: cross-track moves, no accidental overlaps, edge snapping, autoscroll.
+- Plain-language pass across the UI ("Sound" instead of "normal", "Speakers", spelled-out seconds, consistent Volume/Fade wording).
+- README clarified around small-scale productions.
+
 ## [2026-07-03]
 
 ### Added

@@ -37,3 +37,6 @@ cueforge-*.png
 # Local dev launcher (not committed)
 run_dev.bat
 
+# Claude Code local settings (the skills folder IS committed, on dev only)
+.claude/settings.local.json
+

@@ -1,0 +1,623 @@
+/* CueForge compound-cue timeline editor (js/timeline.js). A near-fullscreen
+   modal that reuses the shared .modal-overlay backdrop + keyboard guard. The
+   teal --compound-cue accent (theme.css) marks compound geometry throughout.
+
+   Layout: a fixed head column (vertical-only, hidden overflow) beside a lane
+   viewport that owns BOTH scroll axes (the only visible scrollbars). Vertical
+   scroll is mirrored head<->lanes in JS; the playhead is one element inside the
+   scrolling .tl-inner so it stays aligned under scroll/zoom with no math. */
+
+.tl-overlay {
+  /* Reuse .modal-overlay's fixed backdrop/centering; just raise it above the
+     library picker so an editor opened from the library sits on top. The
+     backdrop is darker + blurred than the shared modal so the page behind
+     can't be mistaken for part of the editor. */
+  z-index: 260;
+  padding: 12px;
+  background: rgba(5, 7, 10, 0.8);
+  backdrop-filter: blur(4px);
+}
+
+.tl-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: min(1200px, calc(100vw - 24px));
+  height: min(90dvh, 900px);
+  max-height: calc(100dvh - 24px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  position: relative;    /* anchor for the floating drag tip */
+}
+
+/* ---------- head ---------- */
+.tl-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.tl-title {
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 60px;   /* C11: the cue name can't be squeezed to zero by the chip/buttons */
+}
+.tl-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.tl-actions .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Compact log-scale zoom slider between the -/+ buttons. */
+.tl-zoom-slider {
+  width: 96px;
+  align-self: center;
+  accent-color: var(--compound-cue);
+  cursor: pointer;
+}
+
+/* ---------- transport ---------- */
+.tl-transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.tl-play {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+}
+.tl-play:hover { border-color: var(--compound-cue); }
+.tl-play::before { content: "\25B6"; }             /* play triangle */
+.tl-play.playing { border-color: var(--compound-cue); color: var(--compound-cue); }
+.tl-play.playing::before { content: "\23F8"; }     /* pause bars */
+.tl-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 100px;
+}
+
+/* ---------- status chip (timeline) + shared .tl-badge (library panel) ---------- */
+.tl-chip {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.tl-chip.ready { color: var(--compound-cue); border-color: var(--compound-cue); }
+.tl-chip.busy  { color: var(--accent); border-color: var(--accent); }
+.tl-chip.error { color: var(--panic); border-color: var(--panic); }
+.tl-chip.empty { color: var(--muted); }
+.tl-chip .tl-retry {
+  padding: 2px 8px;
+  font-size: 10.5px;
+  border-radius: 6px;
+}
+.tl-spin {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  display: inline-block;
+  animation: tl-spin 0.8s linear infinite;
+}
+@keyframes tl-spin { to { transform: rotate(360deg); } }
+
+/* .tl-badge is still used by the library compound panel (library.js). */
+.tl-badge {
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.tl-badge.ready { color: var(--compound-cue); border-color: var(--compound-cue); }
+.tl-badge.pending { color: var(--fade-cue); border-color: var(--fade-cue); }
+.tl-badge.rendering { color: var(--accent); border-color: var(--accent); }
+.tl-badge.error {
+  color: var(--panic);
+  border-color: var(--panic);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- body: palette + main ---------- */
+.tl-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.tl-palette {
+  flex: 0 0 180px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tl-palette-title {
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 2px 2px 2px;
+}
+.tl-palette-hint {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 2px 4px;
+  line-height: 1.4;
+}
+.tl-palette-empty { color: var(--muted); font-size: 12px; padding: 6px 2px; line-height: 1.5; }
+.tl-pal-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.tl-pal-item:hover { border-color: var(--compound-cue); }
+.tl-pal-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-pal-dur {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.tl-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- fixed head column + lane viewport ---------- */
+.tl-grid {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.tl-headcol {
+  flex: 0 0 172px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+.tl-corner {
+  flex: 0 0 auto;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.tl-heads {
+  flex: 1;
+  overflow: hidden;   /* scrollTop mirrored from .tl-lanes */
+  /* C4: match the 12px the lanes viewport loses to its horizontal scrollbar so
+     head rows and lanes stay row-aligned. */
+  padding-bottom: 12px;
+  box-sizing: border-box;
+}
+.tl-lanes {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;     /* THE scroll container (both axes) */
+  position: relative;
+  /* C4: reserve a constant gutter + fixed-height scrollbar so the viewport
+     height never jumps and stays aligned with .tl-heads. */
+  scrollbar-gutter: stable;
+}
+.tl-lanes::-webkit-scrollbar { height: 12px; width: 12px; }
+.tl-lanes::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+}
+.tl-lanes::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+.tl-lanes::-webkit-scrollbar-track { background: transparent; }
+.tl-lanes.dragover { box-shadow: inset 0 0 0 2px var(--compound-cue); }
+.tl-inner { position: relative; }
+
+/* C3: --border resolves to ~--panel (near-zero contrast), so the row/column
+   dividers are invisible. Give the timeline its own faint but visible lines. */
+.tl-head-row, .tl-lane { border-bottom-color: rgba(255, 255, 255, 0.06); }
+.tl-headcol { border-right-color: rgba(255, 255, 255, 0.08); }
+
+/* ---------- ruler ---------- */
+.tl-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  height: 22px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.tl-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+}
+.tl-tick span {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ---------- playhead ---------- */
+.tl-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px solid #fff;
+  pointer-events: none;
+  z-index: 6;
+}
+.tl-playhead::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border: 4px solid transparent;
+  border-top-color: #fff;
+}
+
+/* ---------- tracks / lanes ---------- */
+.tl-tracks { position: relative; }
+
+/* "New track" drop indicator shown under the lanes while a clip drag hovers
+   below the last lane (A1). Created on release, not during the drag. */
+.tl-newtrack-hint {
+  height: 34px;
+  margin: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--compound-cue);
+  border-radius: 6px;
+  background: rgba(70, 194, 181, 0.07);
+  color: var(--compound-cue);
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  pointer-events: none;
+}
+
+/* Onboarding when there are no tracks. */
+.tl-onboard {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+  max-width: 520px;
+  margin: 0 auto;
+}
+.tl-onboard-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.tl-onboard-body { font-size: 13px; line-height: 1.6; }
+
+/* Head rows (fixed column) share LANE_H with their lanes via inline height. */
+.tl-head-row {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.tl-head-row.selected { background: rgba(70, 194, 181, 0.10); }
+.tl-track-name {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.tl-track-name:focus { outline: none; border-color: var(--compound-cue); }
+.tl-track-ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.tl-track-gain-lbl { display: flex; align-items: center; gap: 4px; }
+.tl-track-gain {
+  width: 52px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 3px 5px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.tl-track-mute-lbl { display: flex; align-items: center; gap: 3px; cursor: pointer; }
+.tl-track-mute { accent-color: var(--compound-cue); cursor: pointer; }   /* C10 */
+.tl-track-del {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 2px 7px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.tl-track-del:hover { color: var(--panic); border-color: var(--panic); }
+
+.tl-lane {
+  position: relative;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border);
+  background:
+    repeating-linear-gradient(90deg, transparent, transparent 39px, rgba(255, 255, 255, 0.03) 39px, rgba(255, 255, 255, 0.03) 40px);
+  touch-action: none;   /* pointer drags own the lane, no scroll hijack */
+}
+/* C7: match the head-row selection strength (0.10) + an accent edge. box-shadow
+   (not border-left) keeps clips pixel-aligned with the ruler. */
+.tl-lane.selected {
+  background-color: rgba(70, 194, 181, 0.10);
+  box-shadow: inset 2px 0 0 var(--compound-cue);
+}
+/* C5: a muted track must read as muted in the lane, not just the head checkbox. */
+.tl-lane.muted { background-color: rgba(0, 0, 0, 0.25); }
+.tl-lane.muted .tl-clip { opacity: 0.45; filter: grayscale(0.4); }
+/* Explicit "Muted" tag so the silent state is unmistakable in the lane. */
+.tl-lane.muted::after {
+  content: "Muted";
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--muted);
+  border-radius: 999px;
+  padding: 1px 7px;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+/* ---------- clip ---------- */
+.tl-clip {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  border: 1px solid var(--compound-cue);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.34);   /* dark body so the light wave reads */
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.tl-clip.dragging { cursor: grabbing; z-index: 4; }   /* C9: paint above neighbours mid-drag */
+.tl-clip.selected {
+  box-shadow: 0 0 0 2px var(--compound-cue), 0 0 10px rgba(70, 194, 181, 0.5);
+  z-index: 2;
+}
+.tl-clip .tl-clip-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.tl-clip-label {
+  position: absolute;
+  left: 5px;
+  bottom: 3px;
+  right: 5px;
+  font-size: 10.5px;
+  color: var(--text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.tl-clip.missing {
+  border-color: var(--panic);
+  background:
+    repeating-linear-gradient(45deg, rgba(220, 61, 66, 0.18), rgba(220, 61, 66, 0.18) 6px, transparent 6px, transparent 12px);
+}
+
+/* C2: honest fade affordance. A subtle top-corner wash on hover, sized to match
+   the real fade hit-zone (~FADE_PX*3 = 30px, capped at half the clip), so users
+   see where fade-drag lives instead of guessing from a 10px dot. */
+.tl-clip::before, .tl-clip::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  height: 10px;                 /* == FADE_PX top band */
+  width: min(30px, 50%);        /* == min(FADE_PX*3, clipW*0.5) */
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+  z-index: 1;
+}
+.tl-clip::before { left: 0;  background: linear-gradient(to bottom right, rgba(70, 194, 181, 0.4), transparent); }
+.tl-clip::after  { right: 0; background: linear-gradient(to bottom left,  rgba(70, 194, 181, 0.4), transparent); }
+.tl-clip:hover::before, .tl-clip:hover::after { opacity: 1; }
+
+/* The fade envelope is now drawn directly into the clip waveform (envelope-
+   scaled peaks + a thin contour line); only the draggable corner dots remain. */
+
+/* Discoverable grips (trim) + dots (fade). pointer-events:auto but NO listeners
+   -- pointerdown bubbles to the delegated handler on .tl-tracks; the clip's
+   interactive zone is still resolved geometrically (clipZone). */
+.tl-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;               /* == EDGE_PX */
+  z-index: 3;
+  cursor: ew-resize;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+/* The visible affordance is a small neutral pill centred on the edge, not a
+   full-height colored band -- reads as a drag handle, appears on hover. */
+.tl-grip::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 22px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+}
+/* C1/B3a: anchor each grip to its own edge (both defaulted to left:0 before, so
+   only the ::after pill was offset -- the hit-affordance sat at the left edge). */
+.tl-grip-l { left: 0; }
+.tl-grip-r { right: 0; }
+.tl-grip-l::after { left: 1px; }
+.tl-grip-r::after { right: 1px; }
+.tl-clip:hover .tl-grip { opacity: 1; }
+.tl-fadedot {
+  position: absolute;
+  top: 2px;
+  width: 10px;              /* aligns with the FADE_PX top-corner zone */
+  height: 10px;
+  z-index: 3;
+  border-radius: 50%;
+  background: var(--compound-cue);
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  cursor: ew-resize;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.tl-fadedot-l { left: 2px; }
+.tl-fadedot-r { right: 2px; }
+.tl-clip:hover .tl-fadedot,
+.tl-clip.selected .tl-fadedot { opacity: 0.95; }
+
+/* ---------- floating drag readout ---------- */
+.tl-drag-tip {
+  position: fixed;
+  z-index: 300;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  border: 1px solid var(--compound-cue);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- inspector ---------- */
+.tl-inspector {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding: 12px 16px;
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: var(--bg);
+}
+.tl-insp-title {
+  font-weight: 700;
+  font-size: 13px;
+  align-self: center;
+  min-width: 90px;
+}
+.tl-insp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tl-insp-field input,
+.tl-insp-field select {
+  width: 100px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.tl-insp-readout {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  align-self: center;
+}
+.tl-insp-del { margin-left: auto; align-self: center; }
+
+@media (pointer: coarse) {
+  .tl-actions .btn { min-height: 40px; }
+  .tl-pal-item { min-height: 44px; }
+  .tl-track-del { min-width: 34px; min-height: 34px; }
+  .tl-clip { min-width: 8px; }
+  /* Grips/dots always visible on touch (no hover). */
+  .tl-grip { opacity: 0.6; }
+  .tl-fadedot { opacity: 0.9; }
+}

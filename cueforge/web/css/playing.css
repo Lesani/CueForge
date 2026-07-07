@@ -197,6 +197,9 @@
 }
 .cell.stoptype { border-left: 3px solid var(--panic); }
 .cell.stoptype .meta { color: var(--panic); font-weight: 600; }
+.cell.fadetype { border-left: 3px solid var(--fade-cue); }
+.cell.fadetype .meta { color: var(--fade-cue); font-weight: 600; }
+.cell .fademark { color: var(--fade-cue); font-size: 14px; }
 
 /* Long-press standby confirmation flash */
 .cell.standby-flash {
@@ -205,6 +208,59 @@
 @keyframes standby-pulse {
   0% { box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent); }
   100% { box-shadow: 0 0 0 2px transparent, 0 0 0 var(--accent); }
+}
+
+/* Chain marker: non-default trigger mode + pre-wait, top-left corner (the
+   opposite corner from .cell-remove, so edit mode never overlaps the two). */
+.chainmark {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  z-index: 2;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.2px;
+}
+
+/* Armed: a chain has scheduled this placement but it hasn't activated yet. */
+.cell.armed {
+  border-color: var(--accent);
+  animation: armed-pulse 1.1s ease-in-out infinite;
+}
+@keyframes armed-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--accent); }
+  50% { box-shadow: 0 0 8px 1px var(--accent); }
+}
+.armed-badge {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+/* Routing glyph: the placement has an Output override (outputId set). Sits in
+   the meta row (not a top corner) so it never fights the chain mark / the
+   edit-mode remove button for space. */
+.routemark {
+  color: var(--muted);
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+/* Compound placement whose offline render is not ready yet: a small pill in
+   the meta row, teal like the compound accent, so an operator spots a
+   not-yet-playable compound before firing it. */
+.compound-pending {
+  font-size: 9.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--compound-cue);
+  border: 1px solid var(--compound-cue);
+  border-radius: 999px;
+  padding: 0 6px;
+  margin-right: 6px;
+  font-weight: 700;
 }
 
 /* Empty cell */
@@ -487,7 +543,7 @@
 .go:active { transform: translateY(1px); }
 .go:disabled { opacity: 0.45; cursor: default; filter: grayscale(0.4); }
 
-.panic-wrap { display: flex; justify-content: flex-end; }
+.panic-wrap { display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
 .panic {
   border: 0;
   cursor: pointer;
@@ -565,6 +621,7 @@
   }
   .panic-wrap { flex: 0 0 auto; }
   .panic { min-height: 56px; padding: 12px 20px; }
+  .panic-wrap .pause { min-height: 56px; }
 }
 
 /* Very narrow: give the grid a touch more breathing room */

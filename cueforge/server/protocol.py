@@ -9,6 +9,8 @@ messages. The authoritative runtime lives in :mod:`cueforge.server.controller`.
 
 from __future__ import annotations
 
+from cueforge.audio_format import frames_to_seconds
+
 # ---------------------------------------------------------------------------
 # WebSocket action names (client -> server). See PROTOCOL.md.
 # ---------------------------------------------------------------------------
@@ -36,9 +38,22 @@ REMOVE_PAGE = "removePage"
 UPDATE_LIBRARY_ITEM = "updateLibraryItem"
 DUPLICATE_LIBRARY_ITEM = "duplicateLibraryItem"
 CREATE_STOP_CUE = "createStopCue"
+CREATE_FADE_CUE = "createFadeCue"
 NORMALIZE_ITEM = "normalizeItem"
 AUDITION_ITEM = "auditionItem"
 STOP_AUDITION = "stopAudition"
+
+UPDATE_PLACEMENT = "updatePlacement"
+PAUSE = "pause"
+RESUME = "resume"
+
+# Compound cues (see PROTOCOL.md and ADR 0004).
+CREATE_COMPOUND = "createCompound"
+UPDATE_TIMELINE = "updateTimeline"
+RENDER_COMPOUND = "renderCompound"
+
+SET_OUTPUTS = "setOutputs"
+TEST_OUTPUT = "testOutput"
 
 # Every action the server understands over the WebSocket.
 ACTIONS = frozenset(
@@ -65,9 +80,18 @@ ACTIONS = frozenset(
         UPDATE_LIBRARY_ITEM,
         DUPLICATE_LIBRARY_ITEM,
         CREATE_STOP_CUE,
+        CREATE_FADE_CUE,
         NORMALIZE_ITEM,
         AUDITION_ITEM,
         STOP_AUDITION,
+        UPDATE_PLACEMENT,
+        PAUSE,
+        RESUME,
+        SET_OUTPUTS,
+        TEST_OUTPUT,
+        CREATE_COMPOUND,
+        UPDATE_TIMELINE,
+        RENDER_COMPOUND,
     }
 )
 
@@ -125,9 +149,25 @@ def map_engine_status(status: dict, placement_ids: set[str] | None = None) -> di
             "frame": audition.get("frame", 0),
             "totalFrames": audition.get("total_frames", 0),
         }
+
+    # Pause + pending chain fires. Read tolerantly: a FakeEngine or an older
+    # caller may omit both keys, in which case they default to not-paused/empty.
+    paused = bool(status.get("paused", False))
+    scheduled = [
+        {
+            "placementId": s["cue_id"],
+            "cueId": s["cue_id"],
+            "kind": s.get("kind", "normal"),
+            "remainingMs": int(round(frames_to_seconds(s.get("remaining_frames", 0)) * 1000)),
+        }
+        for s in status.get("scheduled", [])
+    ]
     return {
         "playing": playing,
         "backgrounds": backgrounds,
         "auditionActive": bool(status.get("audition_active", False)),
         "audition": audition_pos,
+        "paused": paused,
+        "scheduled": scheduled,
+        "outputs": status.get("outputs", []),
     }

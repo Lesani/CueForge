@@ -23,6 +23,7 @@ import soundfile as sf
 from ..audio_format import CHANNELS, NP_DTYPE, SAMPLE_RATE
 from ..ffmpeg_util import resolve_ffmpeg, wait_for_ffmpeg
 from .model import LibraryItem, make_library_item
+from .render import write_flac_atomic
 from .storage import ProjectSession
 
 
@@ -124,15 +125,7 @@ def import_audio(
     if not session.has_audio(audio_hash):
         pcm = _decode_to_pcm(src_path)
         final = session.audio_path(audio_hash)
-        tmp = final + ".part"
-        try:
-            sf.write(tmp, pcm, SAMPLE_RATE, format="FLAC")
-            os.replace(tmp, final)
-        finally:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        write_flac_atomic(final, pcm)
 
     if name is None:
         base = os.path.basename(src_path)

@@ -12,6 +12,10 @@ import numpy as np
 
 # Fixed engine format. Everything the mixer touches is in this format.
 SAMPLE_RATE = 48_000          # Hz
+# CHANNELS is the STEREO SOURCE/VOICE width -- every voice renders (n, 2) and all
+# stored audio is stereo. It is NOT the mix-bus width: multichannel output widens
+# the engine's accumulator to the device's channel count (see AudioEngine
+# ``_bus_channels``), into which each stereo voice is scattered at its output pair.
 CHANNELS = 2                  # stereo
 NP_DTYPE = np.float32         # internal PCM sample type
 

@@ -177,6 +177,8 @@
 .lib-row .type-badge.normal { color: var(--accent); border-color: var(--accent); }
 .lib-row .type-badge.background { color: var(--bg-cue); border-color: var(--bg-cue); }
 .lib-row .type-badge.stop { color: var(--panic); border-color: var(--panic); }
+.lib-row .type-badge.fade { color: var(--fade-cue); border-color: var(--fade-cue); }
+.lib-row .type-badge.compound { color: var(--compound-cue); border-color: var(--compound-cue); }
 .lib-row .duration {
   font-variant-numeric: tabular-nums;
   font-size: 11.5px;
@@ -242,8 +244,74 @@
   background: var(--bg);
   outline: none;
 }
-.lib-editor-head select.type-select {
+/* Static, immutable meta-type badge in the editor header (the mutable role is a
+   separate "Plays as" select). Colored per type, mirroring the list badge. */
+.lib-editor-head .type-badge-lg {
   flex: 0 0 auto;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+.lib-editor-head .type-badge-lg.normal { color: var(--accent); border-color: var(--accent); }
+.lib-editor-head .type-badge-lg.compound { color: var(--compound-cue); border-color: var(--compound-cue); }
+.lib-editor-head .type-badge-lg.stop { color: var(--panic); border-color: var(--panic); }
+.lib-editor-head .type-badge-lg.fade { color: var(--fade-cue); border-color: var(--fade-cue); }
+
+/* "BG" role pill in the list rows (item.background === true). */
+.lib-row .bg-pill {
+  font-size: 9.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--bg-cue);
+  border: 1px solid var(--bg-cue);
+}
+
+/* Compound-cue editor header: render badge + timeline / render buttons, shown
+   above the standard (rendered-audio) panel. */
+.compound-section {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--compound-cue);
+  border-radius: 10px;
+  background: rgba(70, 194, 181, 0.06);
+}
+.compound-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.compound-head .tl-badge { margin-right: auto; }
+.compound-head .compound-edit {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 9px 18px;
+  border-color: var(--compound-cue);
+  color: var(--compound-cue);
+}
+.compound-head .compound-edit:hover {
+  background: rgba(70, 194, 181, 0.12);
+}
+
+/* Read-only rendered waveform (no trim handles) shown under the compound head. */
+.compound-wave-host {
+  margin-top: 12px;
+  height: 72px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.compound-wave {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .lib-group-row {

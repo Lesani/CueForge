@@ -32,7 +32,7 @@ class FakeEngine:
 
     def __init__(self) -> None:
         self.calls: list[tuple] = []
-        self.status = {"normal": None, "backgrounds": [], "device_ok": True}
+        self.status = {"normal": None, "backgrounds": [], "device_ok": True, "output_channels": 2}
 
     # -- control API (records name + args) --
     def play_normal(self, cue_id, pcm, **kw):
@@ -47,6 +47,19 @@ class FakeEngine:
     def stop_all_backgrounds(self, **kw):
         self.calls.append(("stop_all_backgrounds", None, kw))
 
+    def set_cue_gain(self, cue_id, target_db, ramp_seconds, **kw):
+        self.calls.append(
+            ("set_cue_gain", cue_id, {"target_db": target_db, "ramp_seconds": ramp_seconds, **kw})
+        )
+
+    def set_all_backgrounds_gain(self, target_db, ramp_seconds, **kw):
+        self.calls.append(
+            ("set_all_backgrounds_gain", None, {"target_db": target_db, "ramp_seconds": ramp_seconds, **kw})
+        )
+
+    def set_master_gain(self, db):
+        self.calls.append(("set_master_gain", None, {"db": db}))
+
     def panic(self):
         self.calls.append(("panic", None, {}))
 
@@ -58,6 +71,44 @@ class FakeEngine:
 
     def stop_cue(self, cue_id):
         self.calls.append(("stop_cue", cue_id, {}))
+
+    def set_outputs(self, outputs):
+        self.calls.append(("set_outputs", None, {"outputs": outputs}))
+
+    # -- scheduled (chain) API --
+    def schedule_normal(self, cue_id, pcm, start_in_frames, **kw):
+        self.calls.append(("schedule_normal", cue_id, {"start": start_in_frames, **kw}))
+
+    def schedule_background(self, cue_id, pcm, start_in_frames, **kw):
+        self.calls.append(("schedule_background", cue_id, {"start": start_in_frames, **kw}))
+
+    def schedule_stop_all_backgrounds(self, cue_id, start_in_frames, **kw):
+        self.calls.append(("schedule_stop_all_backgrounds", cue_id, {"start": start_in_frames, **kw}))
+
+    def schedule_stop_background(self, cue_id, target_id, start_in_frames, **kw):
+        self.calls.append(
+            ("schedule_stop_background", cue_id, {"target": target_id, "start": start_in_frames, **kw})
+        )
+
+    def schedule_fade(self, cue_id, target, start_in_frames, target_db, ramp_seconds, **kw):
+        self.calls.append(
+            ("schedule_fade", cue_id,
+             {"target": target, "start": start_in_frames, "target_db": target_db,
+              "ramp_seconds": ramp_seconds, **kw})
+        )
+
+    def cancel_scheduled(self, cue_id):
+        self.calls.append(("cancel_scheduled", cue_id, {}))
+
+    def cancel_all_scheduled(self):
+        self.calls.append(("cancel_all_scheduled", None, {}))
+
+    # -- pause / resume --
+    def pause_all(self):
+        self.calls.append(("pause_all", None, {}))
+
+    def resume_all(self):
+        self.calls.append(("resume_all", None, {}))
 
     def get_status(self):
         return self.status
@@ -126,12 +177,14 @@ def session(tmp_path):
     _write_flac(sess, HASH_N)
     _write_flac(sess, HASH_B)
 
-    # Library items.
-    li_n1 = make_library_item("Normal 1", type="normal", audio_hash=HASH_N, id_factory=factory)
-    li_n2 = make_library_item("Normal 2", type="normal", audio_hash=HASH_N, id_factory=factory)
-    li_n3 = make_library_item("Normal 3", type="normal", audio_hash=HASH_N, id_factory=factory)
+    # Library items. Duration matches the 0.5 s FLAC blobs so chain resolution
+    # (which reads model fields, not PCM) has a real trimmed length to work with.
+    li_n1 = make_library_item("Normal 1", type="normal", audio_hash=HASH_N, duration=0.5, id_factory=factory)
+    li_n2 = make_library_item("Normal 2", type="normal", audio_hash=HASH_N, duration=0.5, id_factory=factory)
+    li_n3 = make_library_item("Normal 3", type="normal", audio_hash=HASH_N, duration=0.5, id_factory=factory)
     li_bg = make_library_item(
-        "BG", type="background", audio_hash=HASH_B, loop=True, gain_db=-3.0, id_factory=factory
+        "BG", type="normal", background=True, audio_hash=HASH_B, duration=0.5,
+        loop=True, gain_db=-3.0, id_factory=factory,
     )
     li_stop = make_library_item(
         "StopAll", type="stop", id_factory=factory,

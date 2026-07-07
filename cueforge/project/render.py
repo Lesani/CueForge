@@ -9,6 +9,8 @@ the audio engine.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import soundfile as sf
 
@@ -20,6 +22,20 @@ from ..audio_format import (
 )
 from .model import LibraryItem
 from .storage import ProjectSession
+
+
+def write_flac_atomic(path: str, pcm: np.ndarray) -> None:
+    """Write (n,2) float32 PCM to a content-addressed FLAC via a .part temp,
+    so a crash mid-write never leaves a truncated file has_audio() trusts."""
+    tmp = path + ".part"
+    try:
+        sf.write(tmp, pcm, SAMPLE_RATE, format="FLAC")
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def load_cue_pcm(session: ProjectSession, item: LibraryItem) -> np.ndarray:

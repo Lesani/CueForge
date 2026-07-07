@@ -15,12 +15,17 @@ import {
   clampView, zoomAbout, fitView, selectionView, chooseTickInterval, barTimes,
 } from "./waveformView.js";
 import { detectTempo } from "./beatDetect.js";
+import { envAt } from "./fadeEnvelope.js";
 
 // Pointer distance (px) within which a click grabs a handle -- generous so the
 // thin handles are easy to grab, especially on touch.
 const HANDLE_HIT_PX = 14;
 // Time ruler band height (px) reserved at the top of the canvas.
 const RULER_H = 18;
+// Fade dot radius (px) and the top band (below the ruler) within which a click
+// grabs a fade dot instead of a trim handle.
+const FADE_DOT_R = 5;
+const FADE_BAND_H = 16;
 // Max zoom: smallest visible window (seconds).
 const MIN_VIEW_DUR = 0.05;
 // Autocorrelation confidence at/above which bars auto-show (and a BPM is shown).
@@ -38,6 +43,7 @@ export function createWaveform(container, opts) {
   const audioHash = opts.audioHash;
   const duration = Math.max(0, Number(opts.duration) || 0);
   const onTrimChange = typeof opts.onTrimChange === "function" ? opts.onTrimChange : () => {};
+  const onFadeChange = typeof opts.onFadeChange === "function" ? opts.onFadeChange : () => {};
   // Returns the current playhead position in absolute waveform seconds, or null
   // to hide the marker. Only polled while setPlaying(true) drives the rAF loop.
   const getPlayheadSeconds = typeof opts.getPlayheadSeconds === "function" ? opts.getPlayheadSeconds : null;
@@ -47,11 +53,16 @@ export function createWaveform(container, opts) {
     opts.trimOut && Number(opts.trimOut) > 0 ? Number(opts.trimOut) : duration,
     0, duration
   );
+  // Fade lengths (seconds), measured from the trim edges inward, plus curve
+  // shape. Drive the envelope-scaled static peaks + the draggable fade dots.
+  let fadeIn = Math.max(0, Number(opts.fadeIn) || 0);
+  let fadeOut = Math.max(0, Number(opts.fadeOut) || 0);
+  let fadeShape = opts.fadeShape === "equalPower" ? "equalPower" : "linear";
 
   let destroyed = false;
   let buffer = null;
   let peaks = null;     // { mins:Float32Array, maxs:Float32Array } sized to last-drawn inner width
-  let dragging = null;  // "in" | "out" | null
+  let dragging = null;  // "in" | "out" | "fadeIn" | "fadeOut" | null
   let playing = false;  // whether the playhead marker loop is running
   let rafId = null;     // requestAnimationFrame handle for the marker loop
 
@@ -118,6 +129,7 @@ export function createWaveform(container, opts) {
   const ctx = canvas.getContext("2d");
   const accentColor = cssVar("--accent", "#4C8DD6");
   const violetColor = cssVar("--bg-cue", "#9B7FE0");
+  const fadeColor = cssVar("--fade-cue", "#E0A84C");
 
   // Static layer: an offscreen canvas (plain <canvas>, not OffscreenCanvas, for
   // Safari) holding background + ruler + peaks -- everything that changes only
@@ -220,18 +232,42 @@ export function createWaveform(container, opts) {
     if (peaks) {
       const mid = RULER_H + (h - RULER_H) / 2;
       const amp = (h - RULER_H) / 2 * 0.92;
+      const span = Math.max(0, trimOut - trimIn);
+      // env for inner pixel x: 1 outside the trim window (that region is dimmed
+      // by the shade overlay, not the fade), else the fade envelope multiplier.
+      const envAtX = (x) => {
+        const t = xT(PAD + x, w);
+        if (t < trimIn || t > trimOut) return 1;
+        return envAt(t - trimIn, fadeIn, fadeOut, span, fadeShape);
+      };
       g.strokeStyle = accentColor;
       g.lineWidth = 1;
       g.beginPath();
       for (let x = 0; x < iw; x++) {
+        const env = envAtX(x);
         const mn = peaks.mins[x], mx = peaks.maxs[x];
-        const y1 = mid - mx * amp;
-        const y2 = mid - mn * amp;
+        const y1 = mid - mx * amp * env;
+        const y2 = mid - mn * amp * env;
         const sx = PAD + x;
         g.moveTo(sx + 0.5, Math.min(y1, y2));
         g.lineTo(sx + 0.5, Math.max(y1, y2) + 0.5);
       }
       g.stroke();
+      // Thin fade contour tracing the upper envelope, ONLY across [trimIn,trimOut]
+      // (amendment 3): start a fresh segment whenever we (re)enter the window.
+      if (span > 0 && (fadeIn > 0 || fadeOut > 0)) {
+        g.strokeStyle = "rgba(255,255,255,0.5)";
+        g.beginPath();
+        let inSeg = false;
+        for (let x = 0; x < iw; x++) {
+          const t = xT(PAD + x, w);
+          if (t < trimIn || t > trimOut) { inSeg = false; continue; }
+          const y = mid - amp * envAt(t - trimIn, fadeIn, fadeOut, span, fadeShape);
+          const sx = PAD + x + 0.5;
+          if (!inSeg) { g.moveTo(sx, y); inSeg = true; } else g.lineTo(sx, y);
+        }
+        g.stroke();
+      }
     }
     staticValid = true;
   }
@@ -286,6 +322,24 @@ export function createWaveform(container, opts) {
 
     drawHandle(g, tX(trimIn, w), h, violetColor, dragging === "in");
     drawHandle(g, tX(trimOut, w), h, violetColor, dragging === "out");
+
+    // Fade dots at the fade line (trimIn+fadeIn / trimOut-fadeOut), in the top
+    // band. Drawn over the handles so a zero-length fade dot sits on the corner.
+    drawFadeDot(g, tX(trimIn + fadeIn, w), dragging === "fadeIn");
+    drawFadeDot(g, tX(trimOut - fadeOut, w), dragging === "fadeOut");
+  }
+
+  // A small round grab dot centred in the top fade band at pixel x.
+  function drawFadeDot(g, x, active) {
+    if (x < PAD - FADE_DOT_R || x > cssW - PAD + FADE_DOT_R) return; // off-screen
+    const y = RULER_H + FADE_BAND_H / 2;
+    g.beginPath();
+    g.arc(x, y, active ? FADE_DOT_R + 1 : FADE_DOT_R, 0, Math.PI * 2);
+    g.fillStyle = fadeColor;
+    g.fill();
+    g.lineWidth = 1;
+    g.strokeStyle = "rgba(0,0,0,0.55)";
+    g.stroke();
   }
 
   // Time ruler: nice-interval major ticks + labels, quarter minor ticks.
@@ -416,6 +470,20 @@ export function createWaveform(container, opts) {
     return null;
   }
 
+  // Fade-dot hit-test: only inside the top fade band, nearest dot within
+  // HANDLE_HIT_PX. Wins over handleAt (checked first in onPointerDown) so the
+  // top corners grab the fade even when they coincide with a trim handle.
+  function fadeHandleAt(x, y, width) {
+    if (y < RULER_H || y > RULER_H + FADE_BAND_H) return null;
+    const xFi = tX(trimIn + fadeIn, width);
+    const xFo = tX(trimOut - fadeOut, width);
+    const dFi = Math.abs(x - xFi);
+    const dFo = Math.abs(x - xFo);
+    if (dFi <= HANDLE_HIT_PX && dFi <= dFo) return "fadeIn";
+    if (dFo <= HANDLE_HIT_PX) return "fadeOut";
+    return null;
+  }
+
   // ---- pointer: trim-drag vs marquee-zoom vs touch pinch/pan ----
   // Touch and pen use the multi-touch gesture paths (pinch zoom, one-finger
   // pan); mouse keeps the exact behaviour it has always had.
@@ -425,9 +493,15 @@ export function createWaveform(container, opts) {
   // used when a second finger turns a trim drag into a pinch.
   function cancelTrimDrag() {
     if (!dragging) return;
-    if (dragStartTrim) { trimIn = dragStartTrim.trimIn; trimOut = dragStartTrim.trimOut; }
+    if (dragStartTrim) {
+      trimIn = dragStartTrim.trimIn;
+      trimOut = dragStartTrim.trimOut;
+      if (dragStartTrim.fadeIn != null) fadeIn = dragStartTrim.fadeIn;
+      if (dragStartTrim.fadeOut != null) fadeOut = dragStartTrim.fadeOut;
+    }
     dragging = null;
     dragStartTrim = null;
+    invalidateStatic();
     draw();
   }
   function cancelMarquee() {
@@ -467,6 +541,7 @@ export function createWaveform(container, opts) {
   function onPointerDown(e) {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
     if (isTouch(e)) {
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       // Second finger down -> begin a pinch, cancelling any single-pointer
@@ -489,10 +564,19 @@ export function createWaveform(container, opts) {
       e.preventDefault();
       return;
     }
+    // Fade dots (top band) win over trim handles at a shared x.
+    const fh = fadeHandleAt(x, y, rect.width);
+    if (fh) {
+      dragging = fh;
+      dragStartTrim = { trimIn, trimOut, fadeIn, fadeOut };
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      e.preventDefault();
+      return;
+    }
     const hnd = handleAt(x, rect.width);
     if (hnd) {
       dragging = hnd;
-      dragStartTrim = { trimIn, trimOut };
+      dragStartTrim = { trimIn, trimOut, fadeIn, fadeOut };
       try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
       e.preventDefault();
       return;
@@ -527,6 +611,14 @@ export function createWaveform(container, opts) {
     if (marquee) { marquee.t1 = xT(x, rect.width); draw(); return; }
     if (!dragging) return;
     const t = xT(x, rect.width);
+    if (dragging === "fadeIn" || dragging === "fadeOut") {
+      const span = Math.max(0, trimOut - trimIn);
+      if (dragging === "fadeIn") fadeIn = Math.max(0, Math.min(span - fadeOut, t - trimIn));
+      else fadeOut = Math.max(0, Math.min(span - fadeIn, trimOut - t));
+      invalidateStatic();   // envelope-scaled peaks + contour must re-stroke
+      draw();
+      return;
+    }
     if (dragging === "in") {
       trimIn = Math.min(t, trimOut - 0.02 > 0 ? trimOut - 0.02 : 0);
       if (trimIn < 0) trimIn = 0;
@@ -534,6 +626,7 @@ export function createWaveform(container, opts) {
       trimOut = Math.max(t, trimIn + 0.02);
       if (trimOut > duration) trimOut = duration;
     }
+    invalidateStatic();     // trim changes the fade window -> re-scale peaks
     draw();
   }
 
@@ -566,10 +659,12 @@ export function createWaveform(container, opts) {
       return;
     }
     if (!dragging) return;
+    const was = dragging;
     dragging = null;
     dragStartTrim = null;
     try { canvas.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
-    onTrimChange({ trimIn, trimOut });
+    if (was === "fadeIn" || was === "fadeOut") onFadeChange({ fadeIn, fadeOut });
+    else onTrimChange({ trimIn, trimOut });
   }
 
   // ---- wheel: Ctrl = zoom at cursor, else pan ----
@@ -719,6 +814,24 @@ export function createWaveform(container, opts) {
     if (nextIn === trimIn && nextOut === trimOut) return;
     trimIn = nextIn;
     trimOut = nextOut;
+    invalidateStatic();   // trim window shapes the envelope-scaled peaks
+    draw();
+  }
+
+  // External sync of the fade lengths + curve shape (mirrors setTrim). Ignored
+  // mid-drag so an echoed server snapshot can't fight the pointer. Amendment 2:
+  // `shape` is mandatory -- a shape change re-strokes even if the two lengths
+  // are unchanged, so the envelope uses the right curve.
+  function setFades(newIn, newOut, shape) {
+    if (dragging) return;
+    const nextIn = Math.max(0, Number(newIn) || 0);
+    const nextOut = Math.max(0, Number(newOut) || 0);
+    const nextShape = shape === "equalPower" ? "equalPower" : "linear";
+    if (nextIn === fadeIn && nextOut === fadeOut && nextShape === fadeShape) return;
+    fadeIn = nextIn;
+    fadeOut = nextOut;
+    fadeShape = nextShape;
+    invalidateStatic();
     draw();
   }
 
@@ -755,5 +868,5 @@ export function createWaveform(container, opts) {
     container.innerHTML = "";
   }
 
-  return { destroy, setTrim, setPlaying };
+  return { destroy, setTrim, setPlaying, setFades };
 }

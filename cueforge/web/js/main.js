@@ -19,7 +19,7 @@ function qs(sel) { return document.querySelector(sel); }
 
 // ---------------------------------------------------------------- tabs
 
-function setTab(tab) {
+export function setTab(tab) {
   if (!SECTIONS.includes(tab)) return;
   activeTab = tab;
   for (const name of SECTIONS) {
@@ -143,6 +143,11 @@ function onKeydown(e) {
     case "]":
       pageNeighbor(1);
       break;
+    case "p":
+    case "P":
+      e.preventDefault();
+      ws.send(store.paused() ? "resume" : "pause");
+      break;
     case "Escape": {
       const now = performance.now();
       if (now - lastEsc < 800) { ws.send("panic"); lastEsc = 0; }
@@ -240,6 +245,16 @@ function boot() {
   playing.mount(qs("#section-playing"));
   library.mount(qs("#section-library"));
   settings.mount(qs("#section-settings"));
+
+  // "Edit in Library..." from the placement popover (playing.js): switch tab
+  // and focus the item. A CustomEvent keeps playing.js decoupled from main.js
+  // (which already imports playing.js -- importing back would be circular).
+  window.addEventListener("cueforge:editLibraryItem", (e) => {
+    const id = e.detail && e.detail.libraryItemId;
+    if (!id) return;
+    setTab("library");
+    library.focusItem(id);
+  });
 
   store.subscribe(renderTopbar);
   renderTopbar(store.get());

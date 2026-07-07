@@ -158,6 +158,98 @@
 .settings-status.ok { color: var(--played); }
 .settings-status.bad { color: var(--panic); }
 
+/* ---------- Outputs card ---------- */
+.settings-outputs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-outputs-named {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.output-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.output-row.unavailable {
+  border-color: var(--panic);
+}
+.output-row .output-name {
+  flex: 1 1 120px;
+  min-width: 90px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13.5px;
+}
+.output-row select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  min-width: 0;
+}
+.output-row select[data-o-device] { flex: 1 1 160px; }
+.output-row select[data-o-channel] { flex: 0 1 110px; }
+.output-mono {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.output-mono input { accent-color: var(--accent); }
+.output-badge {
+  font-size: 10.5px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--panic);
+  border: 1px solid var(--panic);
+  border-radius: 999px;
+  padding: 2px 8px;
+  flex: 0 0 auto;
+}
+.output-row-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+/* Pinned Default row: static name + static channel text, no mono/delete. */
+.output-row-default .output-name-static {
+  flex: 0 0 auto;
+  min-width: 64px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 8px 0;
+}
+.output-row-default select[data-device-select] { flex: 1 1 120px; }
+.output-row-default .output-channel-static {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Ko-fi support link: theme accent instead of the illegible default blue. */
+.settings-support a { color: var(--accent); }
+
 /* ---------- Connect card ---------- */
 .settings-connect {
   grid-column: span 1;

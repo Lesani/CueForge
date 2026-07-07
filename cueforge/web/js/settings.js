@@ -5,7 +5,7 @@
 // is plain REST, refreshed each time this tab becomes active.
 
 import * as store from "./store.js";
-import { authHeaders, getPin } from "./ws.js";
+import { authHeaders, getPin, send } from "./ws.js";
 import { esc } from "./util.js";
 import { promptDialog, alertDialog, confirmDialog } from "./dialogs.js";
 import {
@@ -84,16 +84,37 @@ export function mount(container) {
           <div class="settings-note" data-proj-note></div>
         </section>
 
-        <section class="settings-card">
-          <h3>Output</h3>
-          <div class="settings-field">
-            <label>Output device</label>
-            <select data-device-select></select>
+        <section class="settings-card settings-outputs-card">
+          <h3>Audio outputs</h3>
+          <div class="settings-note">Cues play on Default unless you route them elsewhere.</div>
+
+          <div class="settings-outputs-list">
+            <!-- Pinned, non-deletable Default row. NOT a [data-output-row]; its device
+                 select is the REST-backed global default (data-device-select), never
+                 collected into setOutputs. Sibling of, not child of, data-outputs-list. -->
+            <div class="output-row output-row-default" data-default-row>
+              <span class="output-name-static">Default</span>
+              <select data-device-select></select>
+              <span class="output-channel-static">Stereo 1-2</span>
+              <div class="output-row-actions">
+                <button class="btn" type="button" data-default-test>Test</button>
+              </div>
+            </div>
+            <div class="settings-note" data-device-channels></div>
+
+            <!-- Named rows (WS/store-backed) get injected here by buildOutputsRows(). -->
+            <div class="settings-outputs-named" data-outputs-list></div>
           </div>
+
+          <div class="settings-actions">
+            <button class="btn" type="button" data-output-add>Add output</button>
+          </div>
+
           <div class="settings-field">
-            <label>Master trim (dB)</label>
+            <label>Master volume (dB)</label>
             <input type="number" min="-60" max="12" step="0.5" data-master-db />
           </div>
+
           <div class="settings-status" data-device-status></div>
         </section>
 
@@ -172,8 +193,13 @@ export function mount(container) {
     projNote: sectionEl.querySelector("[data-proj-note]"),
 
     deviceSelect: sectionEl.querySelector("[data-device-select]"),
+    deviceChannels: sectionEl.querySelector("[data-device-channels]"),
     masterDb: sectionEl.querySelector("[data-master-db]"),
     deviceStatus: sectionEl.querySelector("[data-device-status]"),
+    defaultTest: sectionEl.querySelector("[data-default-test]"),
+
+    outputsList: sectionEl.querySelector("[data-outputs-list]"),
+    outputAdd: sectionEl.querySelector("[data-output-add]"),
 
     pinInput: sectionEl.querySelector("[data-pin-input]"),
     pinSave: sectionEl.querySelector("[data-pin-save]"),
@@ -197,6 +223,7 @@ export function mount(container) {
 
   wireProject();
   wireOutput();
+  wireOutputs();
   wireAccess();
   wireUpdate();
 
@@ -242,6 +269,7 @@ function renderFromStore(s) {
       els.deviceStatus.classList.add("bad");
     }
   }
+  renderOutputs();
 }
 
 // ---------------------------------------------------------------- project
@@ -419,6 +447,7 @@ function wireOutput() {
   els.deviceSelect.addEventListener("change", async () => {
     const v = els.deviceSelect.value;
     const outputDevice = v === "" ? null : Number(v);
+    updateDeviceChannelsNote();  // reflect the pick immediately, ahead of the round trip
     try {
       settingsCache = await postJSON("/api/settings", { outputDevice });
     } catch (e) {
@@ -439,6 +468,8 @@ function wireOutput() {
   };
   els.masterDb.addEventListener("change", commitMasterDb);
   els.masterDb.addEventListener("keydown", (e) => { if (e.key === "Enter") els.masterDb.blur(); });
+
+  els.defaultTest.addEventListener("click", () => send("testOutput", {}));
 }
 
 async function loadDevices() {
@@ -457,11 +488,267 @@ function renderDeviceSelect() {
   const options = list.map((d) => {
     const sel = current != null && Number(current) === Number(d.index) ? " selected" : "";
     const tag = d.default ? " (default)" : "";
-    return `<option value="${d.index}"${sel}>${esc(d.name)}${esc(tag)}</option>`;
+    const ch = d.max_output_channels != null ? ` — ${d.max_output_channels} ch` : "";
+    return `<option value="${d.index}"${sel}>${esc(d.name)}${esc(tag)}${esc(ch)}</option>`;
   }).join("");
   const noneSelected = current == null ? " selected" : "";
   els.deviceSelect.innerHTML =
     `<option value=""${noneSelected}>(system default)</option>` + options;
+  updateDeviceChannelsNote();
+  renderOutputs();
+}
+
+// The selected device's channel count, spelled out below the <select> (e.g.
+// "8 output channels (4 pairs)") -- reads the live select value rather than
+// settingsCache so it stays correct while a change is still in flight.
+function updateDeviceChannelsNote() {
+  if (!els || !els.deviceChannels || !els.deviceSelect) return;
+  const v = els.deviceSelect.value;
+  const list = devicesCache || [];
+  const dev = v !== ""
+    ? list.find((d) => Number(d.index) === Number(v))
+    : list.find((d) => d.default);
+  const ch = dev && dev.max_output_channels != null ? Number(dev.max_output_channels) : null;
+  if (ch == null) {
+    els.deviceChannels.textContent = "";
+    return;
+  }
+  const pairs = Math.max(1, Math.floor(ch / 2));
+  els.deviceChannels.textContent =
+    `${ch} output channel${ch === 1 ? "" : "s"} (${pairs} pair${pairs === 1 ? "" : "s"})`;
+}
+
+// ---------------------------------------------------------------- outputs
+//
+// The Outputs card edits show.settings.outputs (a full-replace list, sent via
+// the "setOutputs" WS action). The Default Output itself is implicit -- it is
+// never rendered here (see the card's static caption). Row DOM is only
+// rebuilt when the set of ids changes (add/delete); per-field edits sync in
+// place so an in-progress edit is never clobbered by the next store tick.
+
+let outputsBuiltSig = null; // last-rendered "id1,id2,..." (add/delete rebuild gate)
+
+function newOutputId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return "out-" + Date.now().toString(16) + "-" + Math.random().toString(16).slice(2, 10);
+}
+
+function outputsSig(list) {
+  return list.map((o) => o.id).join(",");
+}
+
+function wireOutputs() {
+  if (!els.outputAdd) return;
+  els.outputAdd.addEventListener("click", () => {
+    const list = collectRowsState();
+    list.push({
+      id: newOutputId(),
+      name: `Output ${list.length + 1}`,
+      device: null,
+      channel: 1,
+      mono: false,
+    });
+    outputsBuiltSig = outputsSig(list);
+    buildOutputsRows(list);
+    send("setOutputs", { outputs: list });
+  });
+}
+
+// Re-render gate: rebuild the row DOM only when the id set changed (add /
+// delete / a fresh snapshot after reconnect); otherwise sync fields in place.
+function renderOutputs() {
+  if (!els || !els.outputsList) return;
+  const list = store.outputs();
+  const sig = outputsSig(list);
+  if (sig !== outputsBuiltSig) {
+    outputsBuiltSig = sig;
+    buildOutputsRows(list);
+  } else {
+    syncOutputsRows(list);
+  }
+}
+
+function isOutputUnavailable(o) {
+  const avail = store.outputAvailability().get(o.id);
+  if (avail && avail.deviceOk === false) return true;
+  if (o.device) {
+    const list = devicesCache || [];
+    if (!list.some((d) => d.name === o.device)) return true;
+  }
+  return false;
+}
+
+// Device <select> options: value is the device NAME (or "" for "use the
+// configured default device"). The output's own stored device is kept as an
+// option even if it's not in the current device list (marked "unavailable")
+// so moving a show between rigs doesn't silently drop the pick.
+function deviceSelectOptionsHtml(current) {
+  const list = devicesCache || [];
+  let found = false;
+  let html = `<option value=""${current ? "" : " selected"}>(same as Default)</option>`;
+  for (const d of list) {
+    const sel = current === d.name ? " selected" : "";
+    if (sel) found = true;
+    const ch = d.max_output_channels != null ? ` — ${d.max_output_channels} ch` : "";
+    html += `<option value="${esc(d.name)}"${sel}>${esc(d.name)}${esc(ch)}</option>`;
+  }
+  if (current && !found) {
+    html += `<option value="${esc(current)}" selected>${esc(current)} (unavailable)</option>`;
+  }
+  return html;
+}
+
+// Channel <select> options: a mono Output picks a single channel ("Ch k"); a
+// stereo Output picks the first of a pair ("Ch k-k+1"). Capped to the
+// selected device's channel count, but never below the currently stored
+// channel (kept visible/selectable even if the device shrank or is unknown).
+function channelOptionsHtml(device, current, mono) {
+  const list = devicesCache || [];
+  const dev = device ? list.find((d) => d.name === device) : list.find((d) => d.default);
+  const maxCh = dev && dev.max_output_channels != null ? Number(dev.max_output_channels) : 16;
+  const cur = Math.max(1, Number(current) || 1);
+  let html = "", curValid = false;
+  if (mono) {
+    for (let ch = 1; ch <= maxCh; ch++) {
+      const sel = ch === cur; if (sel) curValid = true;
+      html += `<option value="${ch}"${sel ? " selected" : ""}>Ch ${ch}</option>`;
+    }
+  } else {
+    for (let ch = 1; ch + 1 <= maxCh; ch += 2) {   // non-overlapping pairs: 1-2, 3-4, ...
+      const sel = ch === cur; if (sel) curValid = true;
+      html += `<option value="${ch}"${sel ? " selected" : ""}>Ch ${ch}-${ch + 1}</option>`;
+    }
+  }
+  // Keep an out-of-range stored channel visible/selectable (device shrank/unknown).
+  if (!curValid) {
+    const label = mono ? `Ch ${cur}` : `Ch ${cur}-${cur + 1}`;
+    html += `<option value="${cur}" selected>${label} (unavailable)</option>`;
+  }
+  return html;
+}
+
+function outputRowHtml(o) {
+  const unavailable = isOutputUnavailable(o);
+  return `
+    <div class="output-row${unavailable ? " unavailable" : ""}" data-output-row="${esc(o.id)}">
+      <input type="text" class="output-name" data-o-name value="${esc(o.name)}" placeholder="Output name" />
+      <select data-o-device>${deviceSelectOptionsHtml(o.device)}</select>
+      <select data-o-channel>${channelOptionsHtml(o.device, o.channel, o.mono)}</select>
+      <label class="output-mono"><input type="checkbox" data-o-mono${o.mono ? " checked" : ""} /> Mono</label>
+      <span class="output-badge" data-o-badge${unavailable ? "" : " hidden"}>Unavailable</span>
+      <div class="output-row-actions">
+        <button class="btn" type="button" data-o-test>Test</button>
+        <button class="btn danger" type="button" data-o-delete>Delete</button>
+      </div>
+    </div>`;
+}
+
+function buildOutputsRows(list) {
+  if (!els.outputsList) return;
+  if (!list.length) {
+    els.outputsList.innerHTML = `<div class="settings-note">No named outputs yet.</div>`;
+    return;
+  }
+  els.outputsList.innerHTML = list.map(outputRowHtml).join("");
+  wireOutputRows();
+}
+
+// Read every row's current field values in DOM order -- the source of truth
+// for a "setOutputs" full-list commit (never partial: the server replaces the
+// whole list every time).
+function collectRowsState() {
+  if (!els.outputsList) return [];
+  return [...els.outputsList.querySelectorAll("[data-output-row]")].map((row) => {
+    const deviceEl = row.querySelector("[data-o-device]");
+    const device = deviceEl && deviceEl.value !== "" ? deviceEl.value : null;
+    return {
+      id: row.dataset.outputRow,
+      name: row.querySelector("[data-o-name]").value.trim(),
+      device,
+      channel: Math.max(1, Number(row.querySelector("[data-o-channel]").value) || 1),
+      mono: row.querySelector("[data-o-mono]").checked,
+    };
+  });
+}
+
+function commitOutputsFromDom() {
+  send("setOutputs", { outputs: collectRowsState() });
+}
+
+function wireOutputRows() {
+  els.outputsList.querySelectorAll("[data-output-row]").forEach((row) => {
+    const id = row.dataset.outputRow;
+    const nameEl = row.querySelector("[data-o-name]");
+    const deviceEl = row.querySelector("[data-o-device]");
+    const chEl = row.querySelector("[data-o-channel]");
+    const monoEl = row.querySelector("[data-o-mono]");
+    const testBtn = row.querySelector("[data-o-test]");
+    const delBtn = row.querySelector("[data-o-delete]");
+
+    nameEl.addEventListener("blur", () => {
+      if (!nameEl.value.trim()) {
+        const o = store.outputs().find((x) => x.id === id);
+        nameEl.value = o ? o.name : "";
+        return;
+      }
+      commitOutputsFromDom();
+    });
+    nameEl.addEventListener("keydown", (e) => { if (e.key === "Enter") nameEl.blur(); });
+
+    deviceEl.addEventListener("change", () => {
+      const curCh = Number(chEl.value) || 1;
+      chEl.innerHTML = channelOptionsHtml(deviceEl.value || null, curCh, monoEl.checked);
+      commitOutputsFromDom();
+    });
+
+    chEl.addEventListener("change", commitOutputsFromDom);
+
+    monoEl.addEventListener("change", () => {
+      const curCh = Number(chEl.value) || 1;
+      chEl.innerHTML = channelOptionsHtml(deviceEl.value || null, curCh, monoEl.checked);
+      commitOutputsFromDom();
+    });
+
+    testBtn.addEventListener("click", () => send("testOutput", { outputId: id }));
+
+    delBtn.addEventListener("click", async () => {
+      const o = store.outputs().find((x) => x.id === id);
+      const name = o ? o.name : "this output";
+      if (!(await confirmDialog(`Delete output "${name}"?`, { danger: true }))) return;
+      const list = collectRowsState().filter((x) => x.id !== id);
+      outputsBuiltSig = outputsSig(list);
+      buildOutputsRows(list);
+      send("setOutputs", { outputs: list });
+    });
+  });
+}
+
+// Sync existing rows' fields from the store without rebuilding the DOM (skips
+// any field whose element is currently focused, matching applySettings()'s
+// convention elsewhere in this file).
+function syncOutputsRows(list) {
+  if (!els.outputsList) return;
+  const byId = new Map(list.map((o) => [o.id, o]));
+  els.outputsList.querySelectorAll("[data-output-row]").forEach((row) => {
+    const o = byId.get(row.dataset.outputRow);
+    if (!o) return;
+    const nameEl = row.querySelector("[data-o-name]");
+    if (nameEl && document.activeElement !== nameEl) nameEl.value = o.name;
+    const deviceEl = row.querySelector("[data-o-device]");
+    const chEl = row.querySelector("[data-o-channel]");
+    const monoEl = row.querySelector("[data-o-mono]");
+    if (deviceEl && document.activeElement !== deviceEl) {
+      deviceEl.innerHTML = deviceSelectOptionsHtml(o.device);
+    }
+    if (monoEl && document.activeElement !== monoEl) monoEl.checked = !!o.mono;
+    if (chEl && document.activeElement !== chEl) {
+      chEl.innerHTML = channelOptionsHtml(o.device, o.channel, o.mono);
+    }
+    const unavailable = isOutputUnavailable(o);
+    row.classList.toggle("unavailable", unavailable);
+    const badge = row.querySelector("[data-o-badge]");
+    if (badge) badge.hidden = !unavailable;
+  });
 }
 
 // ---------------------------------------------------------------- access

@@ -109,7 +109,7 @@ function matchSummary(item) {
   const bits = [item.type];
   const d = itemDuration(item);
   if (d != null) bits.push(formatClock(d));
-  if (item.type === "background" && item.loop) bits.push("loop");
+  if (item.background && item.loop) bits.push("loop");
   return bits.join(" · ");
 }
 

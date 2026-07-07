@@ -112,3 +112,45 @@ export function backgroundsById() {
   }
   return m;
 }
+
+// True while the engine's show voices are frozen (pause/resume transport).
+export function paused() {
+  return !!(snapshot.runtime && snapshot.runtime.paused);
+}
+
+// Map of placementId -> {remainingMs, kind} for pending chain fires ("armed"
+// cells): placements a chain has scheduled but not yet activated.
+export function scheduledById() {
+  const rt = snapshot.runtime;
+  const m = new Map();
+  if (rt && Array.isArray(rt.scheduled)) {
+    for (const s of rt.scheduled) m.set(s.placementId, { remainingMs: s.remainingMs, kind: s.kind });
+  }
+  return m;
+}
+
+// The show's defined named audio Outputs (settings.outputs): [{id, name,
+// device, channel, mono}]. Edited via the "setOutputs" WS action. The Default
+// Output (device None, channels 1-2) is implicit and never appears here.
+export function outputs() {
+  const s = snapshot.show;
+  return (s && s.settings && s.settings.outputs) || [];
+}
+
+// Map of outputId -> {id, deviceOk, deviceChannels}, the runtime availability
+// mirror of outputs() (see runtime.outputs in PROTOCOL.md).
+export function outputAvailability() {
+  const rt = snapshot.runtime;
+  const m = new Map();
+  if (rt && Array.isArray(rt.outputs)) {
+    for (const o of rt.outputs) m.set(o.id, o);
+  }
+  return m;
+}
+
+// Convenience label for an outputId (null/dangling -> "Default").
+export function outputLabel(id) {
+  if (!id) return "Default";
+  const o = outputs().find((x) => x.id === id);
+  return o ? o.name : "Default";
+}

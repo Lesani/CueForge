@@ -20,7 +20,13 @@ from .model import (
     make_show,
     new_id,
 )
-from .render import cue_engine_params, load_cue_pcm, normalize
+from .render import cue_engine_params, load_cue_pcm, normalize, write_flac_atomic
+from .renderer import (
+    MAX_RENDER_FRAMES,
+    RenderError,
+    compound_signature,
+    render_timeline,
+)
 from .storage import ProjectSession
 from .traversal import page_cue_sequence, placement_at
 
@@ -44,6 +50,11 @@ __all__ = [
     "load_cue_pcm",
     "cue_engine_params",
     "normalize",
+    "write_flac_atomic",
+    "RenderError",
+    "compound_signature",
+    "render_timeline",
+    "MAX_RENDER_FRAMES",
     "page_cue_sequence",
     "placement_at",
 ]

@@ -52,7 +52,7 @@ except Exception:  # pragma: no cover
     _HAS_MULTIPART = False
 
 from cueforge import ffmpeg_util, update_util
-from cueforge.engine import AudioEngine
+from cueforge.engine import AudioEngine, EngineHub
 from cueforge.project import (
     ProjectSession,
     add_clone,
@@ -201,8 +201,11 @@ class ConnectionManager:
 class AppState:
     def __init__(self) -> None:
         self.config = load_config()
-        self.engine = AudioEngine()
+        self.engine = EngineHub()
         self.controller = ShowController(self.engine)
+        from cueforge.server.compound_render import CompoundRenderManager
+        self.render_manager = CompoundRenderManager(self)
+        self.controller.on_compound_dirty = self.render_manager.schedule
         self.manager = ConnectionManager()
         self.dispatch_lock = asyncio.Lock()
         self._status_task: asyncio.Task | None = None
@@ -287,7 +290,11 @@ def create_app() -> FastAPI:
     async def _on_startup() -> None:
         # Best-effort audio output start; never crash if the device is missing.
         try:
-            state.engine.start_output(state.config.get("outputDevice"))
+            state.engine.set_default_device(state.config.get("outputDevice"))
+        except Exception:
+            pass
+        try:
+            state.engine.set_master_gain(float(state.config.get("masterDb", 0.0) or 0.0))
         except Exception:
             pass
         # Reopen the last project the operator was working in; if there is no
@@ -317,6 +324,12 @@ def create_app() -> FastAPI:
             if session is not None:
                 state.controller.set_session(session)
         state.loop = asyncio.get_running_loop()
+        # Re-render any compound whose signature is stale versus its stored blob
+        # (an edited/re-imported source, or a render that never completed).
+        try:
+            state.render_manager.schedule_dirty_all()
+        except Exception:
+            pass
         state._status_task = asyncio.create_task(_status_loop())
 
     @app.on_event("shutdown")
@@ -324,7 +337,7 @@ def create_app() -> FastAPI:
         if state._status_task is not None:
             state._status_task.cancel()
         try:
-            state.engine.stop_output()
+            state.engine.stop_all_output()
         except Exception:
             pass
 
@@ -615,7 +628,12 @@ def create_app() -> FastAPI:
         save_config(state.config)
         if "outputDevice" in body:
             try:
-                state.engine.start_output(state.config.get("outputDevice"))
+                state.engine.set_default_device(state.config.get("outputDevice"))
+            except Exception:
+                pass
+        if "masterDb" in body:
+            try:
+                state.engine.set_master_gain(float(state.config.get("masterDb", 0.0) or 0.0))
             except Exception:
                 pass
         await state.broadcast_state()
@@ -791,6 +809,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=f"cannot open project: {exc}")
         state.controller.set_session(session)
         _record_last_project(name)
+        state.render_manager.schedule_dirty_all()
         await state.broadcast_state()
         return {"name": name}
 
@@ -937,6 +956,7 @@ def create_app() -> FastAPI:
                 await asyncio.to_thread(session.save_as, _project_path(name))
                 state.controller.set_session(session)
                 _record_last_project(name)
+                state.render_manager.schedule_dirty_all()
             await state.broadcast_state()
             return {"name": name}
         finally:

@@ -9,6 +9,8 @@
   --play-fill: rgba(76, 141, 214, 0.35);
   --played:    #4FB477;                 /* green border */
   --bg-cue:    #9B7FE0;                 /* violet */
+  --fade-cue:  #E0A44C;                 /* amber */
+  --compound-cue: #46C2B5;              /* teal accent for compound cues + timeline */
   --go:        #35A85A;
   --panic:     #DC3D42;
 

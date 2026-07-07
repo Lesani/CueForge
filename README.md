@@ -4,14 +4,36 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20development-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/lesani)
 
-A reliable, server-side **audio cue system** for theater, sports, and other live
-productions, driven from a browser. Run the server on the booth machine, then
-control the show from any browser on the network — laptop, tablet, or phone.
-Multiple clients share one live show state.
+A reliable, server-side **audio cue system for amateur and small-scale
+productions** — amateur theatre, community stages, dance, school and church
+events, small venues — driven from a browser. Run the server on the booth
+machine, then control the show from any browser on the network — laptop,
+tablet, or phone. Multiple clients share one live show state.
 
 The machine running the server is the one that produces the audio (it feeds the
 sound board), so cue playback is centralized and deterministic; the browsers are
 just controllers.
+
+## Built for the small stage
+
+CueForge deliberately does **less** than professional show-control suites.
+Amateur productions run on limited time, borrowed hardware, and crews that
+change from show to show — so the tool should be learnable in an afternoon
+and dependable on show night:
+
+- **Fire cues, in order, reliably.** A grid of buttons and a big GO. No
+  scripting, no MIDI routing matrices, no session concepts.
+- **Plain language everywhere.** Volume instead of gain staging, "Plays as
+  Background" instead of bus assignments, fades you drag directly on the
+  waveform.
+- **One file per show.** Carry the whole production on a USB stick; open it on
+  another machine and it plays.
+
+If you need SMPTE timecode, MIDI control, or many-bus routing, have a look at
+[LivePlay](https://tdoukinitsas.github.io/liveplay/) — a fellow open-source
+(AGPL) cue system with a professional feature set. If you need tonight's show
+to just work from a laptop and a pair of speakers (or a handful of them),
+CueForge is for you.
 
 ![CueForge playing view — cue running with progress, looping background bed, stop cues](assets/screenshot-playing-live.png)
 
@@ -111,7 +133,9 @@ Per-user data lives under `~/CueForge`:
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev
 environment, project layout, tests, building the executable, and how to open a
-pull request.
+pull request. When proposing features, keep the project's focus in mind:
+CueForge stays small and approachable — features that mainly serve large,
+complex productions are usually a better fit for other tools.
 
 If CueForge is useful to you and you'd like to support its development, you can
 [buy me a coffee on Ko-fi](https://ko-fi.com/lesani). ♥

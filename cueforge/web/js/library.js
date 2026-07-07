@@ -9,7 +9,9 @@ import { importFileWithDedup } from "./importer.js";
 import { openYouTubeImport } from "./youtube.js";
 import { confirmDialog, alertDialog } from "./dialogs.js";
 import { createWaveform } from "./waveform.js";
+import { envAt } from "./fadeEnvelope.js";
 import { getAudioBuffer, getAudioContext } from "./audioCache.js";
+import { openTimelineEditor } from "./timeline.js";
 
 let sectionEl = null;
 let els = null;
@@ -32,9 +34,12 @@ let collapsedGroups = new Set();
 // Sentinel <option> value for the editor's "New group..." choice.
 const NEW_GROUP_OPT = "::new::";
 
-// "+ Stop cue" auto-select: after createStopCue we watch for a brand-new stop
-// item (an id not seen in the previous render) and select it once it arrives.
+// "+ Stop cue" / "+ Fade cue" auto-select: after createStopCue/createFadeCue we
+// watch for a brand-new item of that type (an id not seen in the previous
+// render) and select it once it arrives.
 let pendingStopSelect = false;
+let pendingFadeSelect = false;
+let pendingCompoundSelect = false;
 let prevItemIds = new Set();
 
 // Editor rebuild guard: only tear down / recreate the type-specific DOM
@@ -77,6 +82,8 @@ export function mount(container) {
           <button class="btn primary" type="button" data-import>Import</button>
           <button class="btn" type="button" data-yt-import>YouTube</button>
           <button class="btn" type="button" data-stop-cue>Stop cue</button>
+          <button class="btn" type="button" data-fade-cue>Fade cue</button>
+          <button class="btn" type="button" data-compound-cue>Compound</button>
           <input type="file" data-file-input multiple hidden accept="audio/*,.wav,.mp3,.flac,.aac,.ogg,.m4a" />
           <div class="lib-count" data-count>0 items</div>
         </div>
@@ -103,6 +110,8 @@ export function mount(container) {
     importBtn: sectionEl.querySelector("[data-import]"),
     ytBtn: sectionEl.querySelector("[data-yt-import]"),
     stopCueBtn: sectionEl.querySelector("[data-stop-cue]"),
+    fadeCueBtn: sectionEl.querySelector("[data-fade-cue]"),
+    compoundCueBtn: sectionEl.querySelector("[data-compound-cue]"),
     sort: sectionEl.querySelector("[data-sort]"),
     fileInput: sectionEl.querySelector("[data-file-input]"),
     count: sectionEl.querySelector("[data-count]"),
@@ -117,6 +126,14 @@ export function mount(container) {
   els.stopCueBtn.addEventListener("click", () => {
     pendingStopSelect = true;
     send("createStopCue", {});
+  });
+  els.fadeCueBtn.addEventListener("click", () => {
+    pendingFadeSelect = true;
+    send("createFadeCue", {});
+  });
+  els.compoundCueBtn.addEventListener("click", () => {
+    pendingCompoundSelect = true;
+    send("createCompound", {});
   });
   els.sort.value = sortMode;
   els.sort.addEventListener("change", () => {
@@ -152,14 +169,23 @@ export function refresh() {
   render(store.get());
 }
 
+// Select and reveal a specific item (e.g. "Edit in Library..." from a
+// placement's popover in playing.js).
+export function focusItem(libraryItemId) {
+  if (!libraryItemId) return;
+  selectedId = libraryItemId;
+  render(store.get());
+}
+
 function libraryItems(show) {
   if (!show || !show.library) return [];
   return sortItems(Object.values(show.library));
 }
 
-// Sort rank for the "Type" order: normal, then background, then stop.
+// Sort rank for the "Type" order: normal, compound, stop, fade. "Background" is
+// now a ROLE flag (item.background), not a meta type, so it no longer ranks.
 function typeRank(t) {
-  return t === "normal" ? 0 : t === "background" ? 1 : 2;
+  return t === "normal" ? 0 : t === "compound" ? 1 : t === "stop" ? 2 : 3;
 }
 
 // Sort a copy of the items per the active sortMode. Every mode falls back to
@@ -171,8 +197,8 @@ function sortItems(items) {
     arr.sort((a, b) => (typeRank(a.type) - typeRank(b.type)) || byName(a, b));
   } else if (sortMode === "duration") {
     arr.sort((a, b) => {
-      const as = a.type === "stop", bs = b.type === "stop";
-      if (as !== bs) return as ? 1 : -1;          // stop items last
+      const as = a.type === "stop" || a.type === "fade", bs = b.type === "stop" || b.type === "fade";
+      if (as !== bs) return as ? 1 : -1;          // stop/fade items last
       if (as && bs) return byName(a, b);
       return ((itemDuration(b) || 0) - (itemDuration(a) || 0)) || byName(a, b); // longest first
     });
@@ -220,6 +246,7 @@ function placementCount(show, libraryItemId) {
 function metaText(item) {
   if (!item) return "";
   if (item.type === "stop") return "STOP";
+  if (item.type === "fade") return "FADE";
   const d = itemDuration(item);
   return d != null ? formatClock(d) : "--:--";
 }
@@ -244,12 +271,20 @@ function render(s) {
   if (selectedId && !items.some((it) => it.id === selectedId)) selectedId = null;
   if (!selectedId && items.length) selectedId = items[0].id;
 
-  // Auto-select a freshly-created stop cue once its snapshot lands. Race-
+  // Auto-select a freshly-created stop/fade cue once its snapshot lands. Race-
   // tolerant: if nothing new appears yet the flag simply waits for the next
-  // new stop item.
+  // new item of that type.
   if (pendingStopSelect) {
     const fresh = items.find((it) => it.type === "stop" && !prevItemIds.has(it.id));
     if (fresh) { selectedId = fresh.id; pendingStopSelect = false; }
+  }
+  if (pendingFadeSelect) {
+    const fresh = items.find((it) => it.type === "fade" && !prevItemIds.has(it.id));
+    if (fresh) { selectedId = fresh.id; pendingFadeSelect = false; }
+  }
+  if (pendingCompoundSelect) {
+    const fresh = items.find((it) => it.type === "compound" && !prevItemIds.has(it.id));
+    if (fresh) { selectedId = fresh.id; pendingCompoundSelect = false; }
   }
   prevItemIds = new Set(items.map((it) => it.id));
 
@@ -331,7 +366,9 @@ function listSig(items) {
   let s = selectedId + "|" + filterText + "|" + sortMode + "|" +
     [...collapsedGroups].sort().join(",") + "|";
   for (const it of items) {
-    s += it.id + it.name + it.type + it.duration + it.trimIn + it.trimOut + (it.group || "") + ";";
+    s += it.id + it.name + it.type + (it.background ? "1" : "0") + it.duration +
+      it.trimIn + it.trimOut + (it.group || "") +
+      (it.renderState || "") + (it.audioHash || "") + ";";
   }
   return s;
 }
@@ -347,7 +384,8 @@ function rowHtml(it) {
         <div class="info">
           <div class="name">${esc(it.name)}</div>
           <div class="sub">
-            <span class="type-badge ${esc(it.type)}">${esc(it.type)}</span>
+            <span class="type-badge ${esc(it.type)}">${esc(it.type === "normal" ? "sound" : it.type)}</span>
+            ${it.background ? `<span class="bg-pill">BG</span>` : ""}
             <span class="duration">${esc(metaText(it))}</span>
           </div>
         </div>
@@ -468,7 +506,30 @@ function isFocused(el) {
 }
 
 function backgroundOptions(show, excludeId) {
-  return libraryItems(show).filter((it) => it.type === "background" && it.id !== excludeId);
+  return libraryItems(show).filter((it) => it.background && it.id !== excludeId);
+}
+
+// The editor's Output <select> options: "Default" plus one option per named
+// Output defined in Settings (store.outputs()), marked "(unavailable)" when
+// its device isn't currently reachable. The item's own outputId is kept as an
+// option even if the Output was since deleted (marked "(missing)") so moving
+// a show between rigs, or a stale reference, doesn't silently reset routing.
+function outputSelectOptions(currentId) {
+  const outputs = store.outputs();
+  const avail = store.outputAvailability();
+  let html = `<option value=""${currentId ? "" : " selected"}>Default</option>`;
+  let found = false;
+  for (const o of outputs) {
+    if (o.id === currentId) found = true;
+    const a = avail.get(o.id);
+    const unavailable = a && a.deviceOk === false;
+    const sel = o.id === currentId ? " selected" : "";
+    html += `<option value="${esc(o.id)}"${sel}>${esc(o.name)}${unavailable ? " (unavailable)" : ""}</option>`;
+  }
+  if (currentId && !found) {
+    html += `<option value="${esc(currentId)}" selected>(missing)</option>`;
+  }
+  return html;
 }
 
 function renderEditor(show, item) {
@@ -492,16 +553,24 @@ function buildEditor(show, item) {
   if (waveformHandle) { waveformHandle.destroy(); waveformHandle = null; }
 
   const isStop = item.type === "stop";
-  const isBackground = item.type === "background";
+  const isFade = item.type === "fade";
+  const isControl = isStop || isFade;
+  const isCompound = item.type === "compound";
+  // A compound behaves like a normal audio item once rendered, but its audio
+  // is server-managed (the offline render), so the audition/export controls
+  // stay disabled until a render exists.
+  const noAudition = isControl || (isCompound && !item.audioHash);
+
+  // The meta type is immutable (the backend rejects `type` on updateLibraryItem),
+  // so it is shown as a static badge -- the mutable "Background" ROLE lives in a
+  // separate "Plays as" select below.
+  const metaBadge = { normal: "SOUND", compound: "COMPOUND", stop: "STOP", fade: "FADE" }[item.type] || "SOUND";
+  const typeControl = `<span class="type-badge-lg ${esc(item.type)}">${metaBadge}</span>`;
 
   let html = `
     <div class="lib-editor-head">
       <input type="text" class="name-input" data-f-name value="${esc(item.name)}" />
-      <select class="type-select" data-f-type>
-        <option value="normal"${item.type === "normal" ? " selected" : ""}>Normal</option>
-        <option value="background"${item.type === "background" ? " selected" : ""}>Background</option>
-        <option value="stop"${item.type === "stop" ? " selected" : ""}>Stop</option>
-      </select>
+      ${typeControl}
     </div>
     <div class="lib-group-row">
       <label>Group</label>
@@ -509,47 +578,110 @@ function buildEditor(show, item) {
       <input type="text" class="group-new-input" data-f-group-new placeholder="New group name" hidden />
     </div>`;
 
-  if (!isStop) {
+  if (isCompound) {
+    const badge = compoundBadge(item);
+    html += `
+      <div class="compound-section">
+        <div class="compound-head">
+          <span class="tl-badge ${badge.cls}" data-compound-badge>${esc(badge.text)}</span>
+          <button class="btn primary compound-edit" type="button" data-edit-timeline>Edit timeline</button>
+        </div>
+        ${item.audioHash ? `<div class="compound-wave-host"><canvas class="compound-wave" data-compound-wave></canvas></div>` : ""}
+      </div>`;
+  }
+
+  if (!isControl && !isCompound) {
     html += `
       <div class="waveform-section">
         <div class="lib-field-label">Waveform (drag handles to trim)</div>
         <div class="waveform-host" data-waveform></div>
         <div class="waveform-hint">Trim: <span data-trim-readout></span></div>
-      </div>
+      </div>`;
+  }
+
+  if (!isControl) {
+    html += `
       <div class="lib-field-group">
         <div class="lib-field">
-          <label>Gain (dB)</label>
+          <label>Volume (dB)</label>
           <div class="gain-row">
             <input type="range" min="-48" max="12" step="0.1" data-f-gain-range value="${Number(item.gainDb) || 0}" />
             <input type="number" min="-48" max="12" step="0.1" data-f-gain-num value="${Number(item.gainDb) || 0}" />
           </div>
         </div>
         <div class="lib-field">
-          <label>Fade in (s)</label>
+          <label>Fade in (seconds)</label>
           <input type="number" min="0" step="0.05" data-f-fadein value="${Number(item.fadeIn) || 0}" />
         </div>
         <div class="lib-field">
-          <label>Fade out (s)</label>
+          <label>Fade out (seconds)</label>
           <input type="number" min="0" step="0.05" data-f-fadeout value="${Number(item.fadeOut) || 0}" />
         </div>
         <div class="lib-field">
-          <label>Fade shape</label>
+          <label>Fade curve</label>
           <select data-f-fadeshape>
-            <option value="linear"${item.fadeShape === "linear" ? " selected" : ""}>Linear</option>
-            <option value="equalPower"${item.fadeShape === "equalPower" ? " selected" : ""}>Equal power</option>
+            <option value="equalPower"${item.fadeShape === "equalPower" ? " selected" : ""}>Smooth</option>
+            <option value="linear"${item.fadeShape === "linear" ? " selected" : ""}>Straight</option>
           </select>
         </div>
         <div class="lib-field">
+          <label>Output</label>
+          <select data-f-output>${outputSelectOptions(item.outputId)}</select>
+        </div>
+        <div class="lib-field">
+          <label>Plays as</label>
+          <select class="role-select" data-f-role>
+            <option value="normal"${!item.background ? " selected" : ""}>Normal (one at a time)</option>
+            <option value="background"${item.background ? " selected" : ""}>Background (layered, can loop)</option>
+          </select>
+        </div>
+        ${isCompound ? "" : `<div class="lib-field">
           <label>&nbsp;</label>
           <button class="btn" type="button" data-normalize>Normalize (~-1 dBFS)</button>
-        </div>
+        </div>`}
       </div>`;
-    if (isBackground) {
-      html += `
-      <div class="lib-toggle-row">
+    // Loop row is ALWAYS rendered for non-control items and hidden unless the
+    // role is Background, so flipping the role never needs an editor rebuild
+    // (editorBuiltFor keys on id|type|audioHash, none of which change).
+    html += `
+      <div class="lib-toggle-row" data-loop-row ${item.background ? "" : "hidden"}>
         <label><input type="checkbox" data-f-loop ${item.loop ? "checked" : ""} /> Loop seamlessly</label>
       </div>`;
-    }
+  } else if (isFade) {
+    const bgOptions = backgroundOptions(show, item.id).map((bg) =>
+      `<option value="${esc(bg.id)}"${item.fadeTarget === bg.id ? " selected" : ""}>${esc(bg.name)}</option>`
+    ).join("");
+    html += `
+      <div class="lib-field-group">
+        <div class="lib-field">
+          <label>Fade target</label>
+          <select data-f-fadetarget>
+            <option value="allBackgrounds"${item.fadeTarget === "allBackgrounds" ? " selected" : ""}>All backgrounds</option>
+            ${bgOptions}
+          </select>
+        </div>
+        <div class="lib-field">
+          <label>Target volume (dB)</label>
+          <div class="gain-row">
+            <input type="range" min="-60" max="12" step="0.1" data-f-fadetodb-range value="${Number(item.fadeToDb) || 0}" />
+            <input type="number" min="-60" max="12" step="0.1" data-f-fadetodb-num value="${Number(item.fadeToDb) || 0}" />
+          </div>
+        </div>
+        <div class="lib-field">
+          <label>Fade time (seconds)</label>
+          <input type="number" min="0.1" step="0.1" data-f-fadetime value="${Number(item.fadeTimeSeconds) || 0}" />
+        </div>
+        <div class="lib-field">
+          <label>Fade curve</label>
+          <select data-f-fadeshape>
+            <option value="equalPower"${item.fadeShape === "equalPower" ? " selected" : ""}>Smooth</option>
+            <option value="linear"${item.fadeShape === "linear" ? " selected" : ""}>Straight</option>
+          </select>
+        </div>
+      </div>
+      <div class="lib-toggle-row">
+        <label><input type="checkbox" data-f-fadestop ${item.fadeStopWhenDone ? "checked" : ""} /> Stop target when done</label>
+      </div>`;
   } else {
     const bgOptions = backgroundOptions(show, item.id).map((bg) =>
       `<option value="${esc(bg.id)}"${item.stopTarget === bg.id ? " selected" : ""}>${esc(bg.name)}</option>`
@@ -580,14 +712,14 @@ function buildEditor(show, item) {
   html += `
     <div class="audition-row">
       <div class="audition-target">
-        <button type="button" data-target="server" class="${auditionTarget === "server" ? "active" : ""}">Server out</button>
-        <button type="button" data-target="device" class="${auditionTarget === "device" ? "active" : ""}"${isStop ? " disabled" : ""}>This device</button>
+        <button type="button" data-target="server" class="${auditionTarget === "server" ? "active" : ""}">Speakers</button>
+        <button type="button" data-target="device" class="${auditionTarget === "device" ? "active" : ""}"${noAudition ? " disabled" : ""}>This device</button>
       </div>
-      <button type="button" class="audition-play" data-play${isStop ? " disabled" : ""}>Play</button>
-      <div class="audition-note">"This device" is an approximate JS preview (trim/gain/fades only).</div>
+      <button type="button" class="audition-play" data-play${noAudition ? " disabled" : ""}>Play</button>
+      <div class="audition-note">"This device" plays a quick rough preview in your browser; "Speakers" plays through the real show output.</div>
     </div>`;
 
-  if (!isStop) {
+  if (!isControl) {
     const dis = item.audioHash ? "" : " disabled";
     html += `
       <div class="export-row">
@@ -600,15 +732,27 @@ function buildEditor(show, item) {
 
   els.editor.innerHTML = html;
 
-  wireEditorInputs(item, isStop);
+  wireEditorInputs(item, isControl, isFade, noAudition);
 
-  if (!isStop) {
+  if (isCompound) {
+    const editBtn = els.editor.querySelector("[data-edit-timeline]");
+    if (editBtn) editBtn.addEventListener("click", () => openTimelineEditor(item.id));
+    const waveCanvas = els.editor.querySelector("[data-compound-wave]");
+    if (waveCanvas && item.audioHash) {
+      drawCompoundWave(waveCanvas, item.audioHash, Number(item.fadeIn) || 0, Number(item.fadeOut) || 0, item.fadeShape);
+    }
+  }
+
+  if (!isControl && !isCompound) {
     const host = els.editor.querySelector("[data-waveform]");
     waveformHandle = createWaveform(host, {
       audioHash: item.audioHash,
       duration: Number(item.duration) || 0,
       trimIn: Number(item.trimIn) || 0,
       trimOut: Number(item.trimOut) || 0,
+      fadeIn: Number(item.fadeIn) || 0,
+      fadeOut: Number(item.fadeOut) || 0,
+      fadeShape: item.fadeShape,
       getPlayheadSeconds: playheadSeconds,
       onTrimChange: ({ trimIn, trimOut }) => {
         // Stop audition on a trim edit so the marker can't drift against the
@@ -616,6 +760,14 @@ function buildEditor(show, item) {
         stopAuditionForTrim();
         updateItem(item.id, { trimIn, trimOut });
         updateTrimReadout(trimIn, trimOut);
+      },
+      onFadeChange: ({ fadeIn, fadeOut }) => {
+        stopAuditionForTrim();
+        updateItem(item.id, { fadeIn, fadeOut });
+        const fi = els.editor.querySelector("[data-f-fadein]");
+        const fo = els.editor.querySelector("[data-f-fadeout]");
+        if (fi && !isFocused(fi)) fi.value = fadeIn;
+        if (fo && !isFocused(fo)) fo.value = fadeOut;
       },
     });
     updateTrimReadout(Number(item.trimIn) || 0, Number(item.trimOut) > 0 ? Number(item.trimOut) : Number(item.duration) || 0);
@@ -627,7 +779,73 @@ function updateTrimReadout(trimIn, trimOut) {
   if (el) el.textContent = `${formatClock(trimIn)} → ${formatClock(trimOut)}`;
 }
 
-function wireEditorInputs(item, isStop) {
+// Plain-language status label + state class for a compound item (mirrors the
+// timeline editor's chip wording). Shared .tl-badge class names live in
+// timeline.css; cls maps onto the existing badge states.
+function compoundBadge(item) {
+  const st = item.renderState || "";
+  const t = item.timeline;
+  const hasClips = !!(t && Array.isArray(t.tracks) && t.tracks.some((tr) => (tr.clips || []).length));
+  if (!hasClips) return { cls: "none", text: "Add sounds to begin" };
+  if (st === "rendering" || st === "pending") return { cls: "rendering", text: "Preparing..." };
+  if (st === "error") return { cls: "error", text: "Problem preparing this cue" };
+  if (st === "ready" || item.audioHash) {
+    const d = itemDuration(item) != null ? formatClock(itemDuration(item)) : formatClock(Number(item.duration) || 0);
+    return { cls: "ready", text: "Ready · " + d };
+  }
+  return { cls: "rendering", text: "Preparing..." };
+}
+
+// Read-only min/max peaks of a compound's rendered audio, drawn in the compound
+// panel (no trim handles). Mirrors the timeline clip-wave peak loop; teal to
+// match the compound accent.
+async function drawCompoundWave(canvas, audioHash, fadeIn, fadeOut, fadeShape) {
+  if (!canvas || !audioHash) return;
+  let buf;
+  try { buf = await getAudioBuffer(audioHash); }
+  catch { return; }
+  if (!canvas.isConnected) return;
+  const w = Math.max(1, Math.floor(canvas.clientWidth));
+  const h = Math.max(1, Math.floor(canvas.clientHeight));
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  const g = canvas.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const ch0 = buf.getChannelData(0);
+  const total = ch0.length;
+  const perPixel = total / w;
+  const mid = h / 2, amp = (h / 2) * 0.88;
+  // A compound render has no trim, so the fade envelope spans the whole buffer.
+  const span = buf.duration;
+  g.strokeStyle = "rgba(70, 194, 181, 0.9)";
+  g.lineWidth = 1;
+  g.beginPath();
+  for (let x = 0; x < w; x++) {
+    const s = Math.floor(x * perPixel);
+    const e = Math.min(total, Math.max(s + 1, Math.floor((x + 1) * perPixel)));
+    let mn = 0, mx = 0;
+    for (let i = s; i < e; i++) { const v = ch0[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    const env = envAt((x / w) * span, fadeIn, fadeOut, span, fadeShape);
+    g.moveTo(x + 0.5, mid - mx * amp * env);
+    g.lineTo(x + 0.5, mid - mn * amp * env + 0.5);
+  }
+  g.stroke();
+  // Thin fade contour where env<1.
+  if (span > 0 && ((fadeIn || 0) > 0 || (fadeOut || 0) > 0)) {
+    g.strokeStyle = "rgba(255,255,255,0.5)";
+    g.beginPath();
+    for (let x = 0; x < w; x++) {
+      const env = envAt((x / w) * span, fadeIn, fadeOut, span, fadeShape);
+      const y = mid - amp * env;
+      if (x === 0) g.moveTo(x + 0.5, y); else g.lineTo(x + 0.5, y);
+    }
+    g.stroke();
+  }
+}
+
+function wireEditorInputs(item, isControl, isFade, noAudition) {
   const ed = els.editor;
 
   const nameInput = ed.querySelector("[data-f-name]");
@@ -640,10 +858,15 @@ function wireEditorInputs(item, isStop) {
     nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") nameInput.blur(); });
   }
 
-  const typeSelect = ed.querySelector("[data-f-type]");
-  if (typeSelect) {
-    typeSelect.addEventListener("change", () => {
-      updateItem(item.id, { type: typeSelect.value });
+  // "Plays as" role: flips the background flag (the backend rejects `type`).
+  // Toggles the always-rendered loop row's visibility with NO editor rebuild.
+  const role = ed.querySelector("[data-f-role]");
+  if (role) {
+    role.addEventListener("change", () => {
+      const bg = role.value === "background";
+      updateItem(item.id, { background: bg });
+      const lr = ed.querySelector("[data-loop-row]");
+      if (lr) lr.hidden = !bg;
     });
   }
 
@@ -689,7 +912,7 @@ function wireEditorInputs(item, isStop) {
     });
   }
 
-  if (!isStop) {
+  if (!isControl) {
     const gainRange = ed.querySelector("[data-f-gain-range]");
     const gainNum = ed.querySelector("[data-f-gain-num]");
     const sendGain = debounced((v) => updateItem(item.id, { gainDb: v }), 150);
@@ -704,21 +927,43 @@ function wireEditorInputs(item, isStop) {
     if (gainNum) gainNum.addEventListener("input", () => onGain(gainNum.value));
 
     const fadeIn = ed.querySelector("[data-f-fadein]");
-    const sendFadeIn = debounced((v) => updateItem(item.id, { fadeIn: v }), 250);
-    if (fadeIn) fadeIn.addEventListener("input", () => sendFadeIn(Math.max(0, Number(fadeIn.value) || 0)));
-
     const fadeOut = ed.querySelector("[data-f-fadeout]");
-    const sendFadeOut = debounced((v) => updateItem(item.id, { fadeOut: v }), 250);
-    if (fadeOut) fadeOut.addEventListener("input", () => sendFadeOut(Math.max(0, Number(fadeOut.value) || 0)));
-
     const fadeShape = ed.querySelector("[data-f-fadeshape]");
-    if (fadeShape) fadeShape.addEventListener("change", () => updateItem(item.id, { fadeShape: fadeShape.value }));
+    // Push the live typed fade values (+ current shape) to the trim widget so the
+    // dots + envelope-scaled wave track what the operator types.
+    const syncWidgetFades = () => {
+      if (!waveformHandle) return;
+      waveformHandle.setFades(
+        Math.max(0, Number(fadeIn && fadeIn.value) || 0),
+        Math.max(0, Number(fadeOut && fadeOut.value) || 0),
+        fadeShape ? fadeShape.value : item.fadeShape
+      );
+    };
+    const sendFadeIn = debounced((v) => updateItem(item.id, { fadeIn: v }), 250);
+    if (fadeIn) fadeIn.addEventListener("input", () => {
+      sendFadeIn(Math.max(0, Number(fadeIn.value) || 0));
+      syncWidgetFades();
+    });
+
+    const sendFadeOut = debounced((v) => updateItem(item.id, { fadeOut: v }), 250);
+    if (fadeOut) fadeOut.addEventListener("input", () => {
+      sendFadeOut(Math.max(0, Number(fadeOut.value) || 0));
+      syncWidgetFades();
+    });
+
+    if (fadeShape) fadeShape.addEventListener("change", () => {
+      updateItem(item.id, { fadeShape: fadeShape.value });
+      syncWidgetFades();   // amendment 2: re-stroke with the new curve
+    });
 
     const normBtn = ed.querySelector("[data-normalize]");
     if (normBtn) normBtn.addEventListener("click", () => send("normalizeItem", { libraryItemId: item.id }));
 
     const loop = ed.querySelector("[data-f-loop]");
     if (loop) loop.addEventListener("change", () => updateItem(item.id, { loop: loop.checked }));
+
+    const out = ed.querySelector("[data-f-output]");
+    if (out) out.addEventListener("change", () => updateItem(item.id, { outputId: out.value || null }));
 
     // Export: trigger a browser download via a transient <a download> (avoids
     // popup blockers that would kill window.open). The server bakes in
@@ -739,6 +984,31 @@ function wireEditorInputs(item, isStop) {
         a.remove();
       });
     });
+  } else if (isFade) {
+    const fadeTarget = ed.querySelector("[data-f-fadetarget]");
+    if (fadeTarget) fadeTarget.addEventListener("change", () => updateItem(item.id, { fadeTarget: fadeTarget.value }));
+
+    const fadeDbRange = ed.querySelector("[data-f-fadetodb-range]");
+    const fadeDbNum = ed.querySelector("[data-f-fadetodb-num]");
+    const sendFadeDb = debounced((v) => updateItem(item.id, { fadeToDb: v }), 150);
+    const onFadeDb = (v) => {
+      const n = Number(v);
+      if (fadeDbRange) fadeDbRange.value = n;
+      if (fadeDbNum) fadeDbNum.value = n;
+      sendFadeDb(n);
+    };
+    if (fadeDbRange) fadeDbRange.addEventListener("input", () => onFadeDb(fadeDbRange.value));
+    if (fadeDbNum) fadeDbNum.addEventListener("input", () => onFadeDb(fadeDbNum.value));
+
+    const fadeTime = ed.querySelector("[data-f-fadetime]");
+    const sendFadeTime = debounced((v) => updateItem(item.id, { fadeTimeSeconds: v }), 250);
+    if (fadeTime) fadeTime.addEventListener("input", () => sendFadeTime(Math.max(0.1, Number(fadeTime.value) || 0)));
+
+    const fadeShape = ed.querySelector("[data-f-fadeshape]");
+    if (fadeShape) fadeShape.addEventListener("change", () => updateItem(item.id, { fadeShape: fadeShape.value }));
+
+    const fadeStop = ed.querySelector("[data-f-fadestop]");
+    if (fadeStop) fadeStop.addEventListener("change", () => updateItem(item.id, { fadeStopWhenDone: fadeStop.checked }));
   } else {
     const stopTarget = ed.querySelector("[data-f-stoptarget]");
     if (stopTarget) stopTarget.addEventListener("change", () => updateItem(item.id, { stopTarget: stopTarget.value }));
@@ -756,7 +1026,7 @@ function wireEditorInputs(item, isStop) {
     if (stopFadeSecs) stopFadeSecs.addEventListener("input", () => sendStopFade(Math.max(0, Number(stopFadeSecs.value) || 0)));
   }
 
-  wireAudition(item, isStop);
+  wireAudition(item, noAudition);
 }
 
 function syncEditor(item) {
@@ -766,7 +1036,17 @@ function syncEditor(item) {
     if (el && !isFocused(el)) el[prop] = val;
   };
   set("[data-f-name]", "value", item.name);
-  set("[data-f-type]", "value", item.type);
+
+  // Compound render badge: renderState/renderError can change without an editor
+  // rebuild (only audioHash flips rebuild the panel), so refresh it live.
+  if (item.type === "compound") {
+    const badgeEl = ed.querySelector("[data-compound-badge]");
+    if (badgeEl) {
+      const badge = compoundBadge(item);
+      badgeEl.className = "tl-badge " + badge.cls;
+      badgeEl.textContent = badge.text;
+    }
+  }
 
   // Rebuild the group dropdown (picks up groups added on other items) and
   // reselect, but only when idle: don't clobber focus or an in-progress
@@ -777,18 +1057,32 @@ function syncEditor(item) {
     groupSelect.innerHTML = groupSelectOptions(store.show(), item);
   }
 
-  if (item.type !== "stop") {
+  if (item.type !== "stop" && item.type !== "fade") {
     set("[data-f-gain-range]", "value", Number(item.gainDb) || 0);
     set("[data-f-gain-num]", "value", Number(item.gainDb) || 0);
     set("[data-f-fadein]", "value", Number(item.fadeIn) || 0);
     set("[data-f-fadeout]", "value", Number(item.fadeOut) || 0);
     set("[data-f-fadeshape]", "value", item.fadeShape);
+    set("[data-f-role]", "value", item.background ? "background" : "normal");
+    const lr = ed.querySelector("[data-loop-row]");
+    if (lr) lr.hidden = !item.background;
     const loop = ed.querySelector("[data-f-loop]");
     if (loop && !isFocused(loop)) loop.checked = !!item.loop;
+    const out = ed.querySelector("[data-f-output]");
+    if (out && !isFocused(out)) out.innerHTML = outputSelectOptions(item.outputId);
     if (waveformHandle) {
       waveformHandle.setTrim(Number(item.trimIn) || 0, Number(item.trimOut) || 0);
+      waveformHandle.setFades(Number(item.fadeIn) || 0, Number(item.fadeOut) || 0, item.fadeShape);
       updateTrimReadout(Number(item.trimIn) || 0, Number(item.trimOut) > 0 ? Number(item.trimOut) : Number(item.duration) || 0);
     }
+  } else if (item.type === "fade") {
+    set("[data-f-fadetarget]", "value", item.fadeTarget);
+    set("[data-f-fadetodb-range]", "value", Number(item.fadeToDb) || 0);
+    set("[data-f-fadetodb-num]", "value", Number(item.fadeToDb) || 0);
+    set("[data-f-fadetime]", "value", Number(item.fadeTimeSeconds) || 0);
+    set("[data-f-fadeshape]", "value", item.fadeShape);
+    const fadeStop = ed.querySelector("[data-f-fadestop]");
+    if (fadeStop && !isFocused(fadeStop)) fadeStop.checked = !!item.fadeStopWhenDone;
   } else {
     set("[data-f-stoptarget]", "value", item.stopTarget);
     set("[data-f-stopmode]", "value", item.stopMode);
@@ -823,7 +1117,8 @@ function updatePlayButton() {
 // so the global keyboard handler can bind it to the spacebar (Library tab).
 export async function toggleAudition() {
   const item = currentItem();
-  if (!item || item.type === "stop") return;
+  if (!item || item.type === "stop" || item.type === "fade") return;
+  if (item.type === "compound" && !item.audioHash) return;   // no render yet
   if (auditionTarget === "server") {
     if (serverAuditionPlaying) {
       send("stopAudition");
@@ -856,7 +1151,7 @@ function applyLiveDeviceGain(gainDb) {
   } catch { /* context unavailable */ }
 }
 
-function wireAudition(item, isStop) {
+function wireAudition(item, noAudition) {
   const ed = els.editor;
   const targetBtns = ed.querySelectorAll("[data-target]");
   const playBtn = ed.querySelector("[data-play]");
@@ -871,7 +1166,7 @@ function wireAudition(item, isStop) {
     });
   });
 
-  if (playBtn && !isStop) {
+  if (playBtn && !noAudition) {
     playBtn.addEventListener("click", () => { toggleAudition(); });
   }
 

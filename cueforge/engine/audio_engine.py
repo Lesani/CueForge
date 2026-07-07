@@ -36,6 +36,7 @@ from cueforge.audio_format import (
     CHANNELS,
     NP_DTYPE,
     SAMPLE_RATE,
+    db_to_gain,
     seconds_to_frames,
 )
 from cueforge.engine.voice import Voice
@@ -46,6 +47,26 @@ PANIC_SECONDS = 0.150     # ~150 ms panic fade
 
 # Simultaneous voice cap (~32 simultaneous voices).
 MAX_BACKGROUNDS = 32
+
+# Scheduled-fade target sentinel: resolve "all backgrounds" at activation time.
+ALL_BACKGROUNDS = "__all_backgrounds__"
+
+
+class _ScheduledFire:
+    """A pending chain fire: apply ``activate`` once ``remaining`` frames elapse.
+
+    ``activate`` is the exact same zero-arg closure a live command would run, so a
+    scheduled fire and a live fire take an identical code path (see the ``_cmd_*``
+    builders). ``kind`` is informational for the status snapshot only.
+    """
+
+    __slots__ = ("cue_id", "remaining", "kind", "activate")
+
+    def __init__(self, cue_id, remaining, kind, activate) -> None:
+        self.cue_id = cue_id
+        self.remaining = int(remaining)
+        self.kind = kind
+        self.activate = activate
 
 
 def _soft_limit(x: np.ndarray) -> np.ndarray:
@@ -72,9 +93,17 @@ def _soft_limit(x: np.ndarray) -> np.ndarray:
 class AudioEngine:
     """Software mixer with normal / background / audition channels."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, bus_channels: int = CHANNELS) -> None:
         self.sample_rate = SAMPLE_RATE
         self.channels = CHANNELS
+
+        # Mix-bus width: the render/accumulator width each voice is scattered
+        # into (floor 2, cap 32). ``CHANNELS`` stays the stereo VOICE/source
+        # width; the bus is wider only on a multichannel device.
+        self._bus_channels = max(2, min(32, int(bus_channels)))
+        # True only for a truly mono device: the bus stays 2-wide (so the full
+        # mix is preserved) and the output stream is opened at 1 channel.
+        self._mono_out = False
 
         self._declick_frames = max(1, seconds_to_frames(DECLICK_SECONDS))
         self._panic_frames = max(1, seconds_to_frames(PANIC_SECONDS))
@@ -87,6 +116,18 @@ class AudioEngine:
         self._backgrounds: "OrderedDict[str, Voice]" = OrderedDict()
         self._audition: Voice | None = None
         self._dying: list[Voice] = []   # voices fading out (declick/stop/panic)
+        # Pending chain fires, counted down sample-accurately in render(). See
+        # docs/adr/0001-chain-timing-on-the-engine-clock.md.
+        self._scheduled: list[_ScheduledFire] = []
+        self._paused = False            # global pause freezes clock + waits
+
+        # Master trim: a device-level gain applied to the summed mix before the
+        # soft limiter, smoothed over ~50 ms so a settings change never steps.
+        self._master_gain = 1.0
+        self._master_start = 1.0
+        self._master_target = 1.0
+        self._master_ramp = 0
+        self._master_smooth_frames = max(1, seconds_to_frames(0.050))
 
         # Output / device handling.
         self.device_ok = True
@@ -104,9 +145,26 @@ class AudioEngine:
         # (WASAPI-exclusive, WDM-KS, or a mismatched endpoint) clocks the samples
         # out at the wrong rate -> garbled, wrong-speed playback.
         self._output_rate = SAMPLE_RATE
-        self._output_channels = CHANNELS
+        self._output_channels = self._bus_channels
         self._resampler = None
-        self._resample_buf = np.zeros((0, CHANNELS), dtype=NP_DTYPE)
+        self._resample_buf = np.zeros((0, self._bus_channels), dtype=NP_DTYPE)
+
+    # =====================================================================
+    # Bus width
+    # =====================================================================
+    def set_bus_channels(self, n: int, *, mono_out: bool = False) -> None:
+        """Set the mix-bus width (and mono-device flag) from a control thread.
+
+        The width fields are mutated while holding ``_lock`` so the audio
+        callback's ``render()`` can never observe a half-updated bus. Safe to
+        call directly from control threads: ``render()`` releases the lock
+        between blocks. Do NOT call it from within a command closure.
+        """
+        with self._lock:
+            self._mono_out = bool(mono_out)
+            self._bus_channels = 2 if mono_out else max(2, min(32, int(n)))
+            self._output_channels = 1 if mono_out else self._bus_channels
+            self._resample_buf = np.zeros((0, self._bus_channels), dtype=NP_DTYPE)
 
     # =====================================================================
     # Command queue plumbing
@@ -121,60 +179,31 @@ class AudioEngine:
             self._commands.popleft()()
 
     # =====================================================================
-    # Public control API
+    # Command builders -- one mutation, shared by the live and scheduled paths
     # =====================================================================
-    def play_normal(
-        self,
-        cue_id: str,
-        pcm: np.ndarray,
-        *,
-        gain_db: float = 0.0,
-        fade_in: float = 0.0,
-        fade_out: float = 0.0,
-        fade_shape: str = "linear",
-    ) -> None:
-        """Play ``pcm`` on the exclusive normal channel, hard-cutting whatever is
-        currently on it with a ~10 ms declick ramp."""
-        voice = Voice(
-            pcm,
-            cue_id=cue_id,
-            gain_db=gain_db,
-            fade_in=fade_in,
-            fade_out=fade_out,
-            fade_shape=fade_shape,
-            loop=False,
-        )
-
+    # Each ``_cmd_*`` returns a zero-arg closure that applies the state change.
+    # Live methods enqueue it immediately; a scheduled fire runs the identical
+    # closure when its countdown reaches zero, so a delayed chain member and a
+    # live tap take a byte-for-byte identical path.
+    def _cmd_play_normal(self, voice: Voice):
         def cmd() -> None:
             if self._normal is not None:
                 self._normal.begin_kill(self._declick_frames)
                 self._dying.append(self._normal)
             self._normal = voice
 
-        self._enqueue(cmd)
+        return cmd
 
-    def play_background(
-        self,
-        cue_id: str,
-        pcm: np.ndarray,
-        *,
-        gain_db: float = 0.0,
-        fade_in: float = 0.0,
-        loop: bool = False,
-        fade_shape: str = "linear",
-    ) -> None:
-        """Start/restart a background layer keyed by ``cue_id``. Same key ->
-        restart the single instance; different keys stack."""
-        voice = Voice(
-            pcm,
-            cue_id=cue_id,
-            gain_db=gain_db,
-            fade_in=fade_in,
-            fade_out=0.0,
-            fade_shape=fade_shape,
-            loop=loop,
-        )
+    def _cmd_stop_normal(self):
+        def cmd() -> None:
+            if self._normal is not None:
+                self._normal.begin_kill(self._declick_frames)
+                self._dying.append(self._normal)
+                self._normal = None
 
+        return cmd
+
+    def _cmd_play_background(self, cue_id: str, voice: Voice):
         def cmd() -> None:
             existing = self._backgrounds.pop(cue_id, None)
             if existing is not None:
@@ -189,7 +218,131 @@ class AudioEngine:
                 self._dying.append(oldest)
             self._backgrounds[cue_id] = voice
 
-        self._enqueue(cmd)
+        return cmd
+
+    def _cmd_stop_background(self, cue_id: str, mode: str, fade_seconds: float):
+        def cmd() -> None:
+            voice = self._backgrounds.pop(cue_id, None)
+            if voice is None:
+                return  # safe no-op if the target is not live (see schedule_*)
+            if mode == "hard":
+                return  # immediate: simply dropped, not rendered again
+            voice.begin_kill(max(1, seconds_to_frames(fade_seconds)))
+            self._dying.append(voice)
+
+        return cmd
+
+    def _cmd_stop_all_backgrounds(self, mode: str, fade_seconds: float):
+        def cmd() -> None:
+            voices = list(self._backgrounds.values())
+            self._backgrounds.clear()
+            if mode == "hard":
+                return
+            frames = max(1, seconds_to_frames(fade_seconds))
+            for voice in voices:
+                voice.begin_kill(frames)
+                self._dying.append(voice)
+
+        return cmd
+
+    def _voices_for(self, cue_id: str) -> list[Voice]:
+        """Live show voices whose engine key matches ``cue_id`` (normal, one
+        background layer, and/or the audition voice keyed ``"__audition__"``)."""
+        voices: list[Voice] = []
+        if self._normal is not None and self._normal.cue_id == cue_id:
+            voices.append(self._normal)
+        bg = self._backgrounds.get(cue_id)
+        if bg is not None:
+            voices.append(bg)
+        if self._audition is not None and self._audition.cue_id == cue_id:
+            voices.append(self._audition)
+        return voices
+
+    def _cmd_set_cue_gain(self, cue_id, target_db, frames, shape, stop_when_done):
+        def cmd() -> None:
+            for v in self._voices_for(cue_id):
+                v.begin_gain_ramp(target_db, frames, shape=shape, stop_when_done=stop_when_done,
+                                  kill_frames=self._declick_frames)
+
+        return cmd
+
+    def _cmd_fade_all_backgrounds(self, target_db, frames, shape, stop_when_done):
+        def cmd() -> None:
+            for v in self._backgrounds.values():
+                v.begin_gain_ramp(target_db, frames, shape=shape, stop_when_done=stop_when_done,
+                                  kill_frames=self._declick_frames)
+
+        return cmd
+
+    # =====================================================================
+    # Public control API (live)
+    # =====================================================================
+    def play_normal(
+        self,
+        cue_id: str,
+        pcm: np.ndarray,
+        *,
+        gain_db: float = 0.0,
+        fade_in: float = 0.0,
+        fade_out: float = 0.0,
+        fade_shape: str = "linear",
+        out_lo: int = 0,
+        out_mono: bool = False,
+    ) -> None:
+        """Play ``pcm`` on the exclusive normal channel, hard-cutting whatever is
+        currently on it with a ~10 ms declick ramp."""
+        voice = Voice(
+            pcm,
+            cue_id=cue_id,
+            gain_db=gain_db,
+            fade_in=fade_in,
+            fade_out=fade_out,
+            fade_shape=fade_shape,
+            loop=False,
+            out_lo=out_lo,
+            out_mono=out_mono,
+        )
+        self._enqueue(self._cmd_play_normal(voice))
+
+    def stop_normal(self) -> None:
+        """Declick-kill the live normal voice (a no-op if none). Used by the hub to
+        enforce normal exclusivity across devices on a live fire."""
+        self._enqueue(self._cmd_stop_normal())
+
+    def schedule_stop_normal(self, cue_id: str, start_in_frames: int) -> None:
+        """Schedule a normal-voice kill ``start_in_frames`` from now, keyed by
+        ``cue_id`` (the firing placement's id, so it cancels with the chain). Used by
+        the hub so a scheduled normal on another engine takes over exclusivity
+        sample-accurately on this engine's own clock."""
+        sf = _ScheduledFire(cue_id, int(start_in_frames), "stopNormal", self._cmd_stop_normal())
+        self._enqueue(lambda: self._scheduled.append(sf))
+
+    def play_background(
+        self,
+        cue_id: str,
+        pcm: np.ndarray,
+        *,
+        gain_db: float = 0.0,
+        fade_in: float = 0.0,
+        loop: bool = False,
+        fade_shape: str = "linear",
+        out_lo: int = 0,
+        out_mono: bool = False,
+    ) -> None:
+        """Start/restart a background layer keyed by ``cue_id``. Same key ->
+        restart the single instance; different keys stack."""
+        voice = Voice(
+            pcm,
+            cue_id=cue_id,
+            gain_db=gain_db,
+            fade_in=fade_in,
+            fade_out=0.0,
+            fade_shape=fade_shape,
+            loop=loop,
+            out_lo=out_lo,
+            out_mono=out_mono,
+        )
+        self._enqueue(self._cmd_play_background(cue_id, voice))
 
     def stop_background(
         self,
@@ -200,17 +353,7 @@ class AudioEngine:
     ) -> None:
         """Stop one background: ``mode="hard"`` removes it immediately,
         ``mode="fade"`` ramps it to silence over ``fade_seconds``."""
-
-        def cmd() -> None:
-            voice = self._backgrounds.pop(cue_id, None)
-            if voice is None:
-                return
-            if mode == "hard":
-                return  # immediate: simply dropped, not rendered again
-            voice.begin_kill(max(1, seconds_to_frames(fade_seconds)))
-            self._dying.append(voice)
-
-        self._enqueue(cmd)
+        self._enqueue(self._cmd_stop_background(cue_id, mode, fade_seconds))
 
     def stop_all_backgrounds(
         self,
@@ -219,16 +362,219 @@ class AudioEngine:
         fade_seconds: float = 2.0,
     ) -> None:
         """Stop every background (hard or fade)."""
+        self._enqueue(self._cmd_stop_all_backgrounds(mode, fade_seconds))
+
+    def set_cue_gain(
+        self,
+        cue_id: str,
+        target_db: float,
+        ramp_seconds: float,
+        *,
+        shape: str = "linear",
+        stop_when_done: bool = False,
+    ) -> None:
+        """Ramp the live gain of the voice(s) keyed by ``cue_id`` to ``target_db``.
+
+        A safe no-op if no voice matches (e.g. a live-edit for a placement that is
+        not currently playing). ``stop_when_done`` drops the voice (declicked) when
+        the ramp settles.
+        """
+        frames = max(1, seconds_to_frames(ramp_seconds))
+        self._enqueue(self._cmd_set_cue_gain(cue_id, target_db, frames, shape, stop_when_done))
+
+    def set_all_backgrounds_gain(
+        self,
+        target_db: float,
+        ramp_seconds: float,
+        *,
+        shape: str = "linear",
+        stop_when_done: bool = False,
+    ) -> None:
+        """Ramp every running background's live gain to ``target_db``."""
+        frames = max(1, seconds_to_frames(ramp_seconds))
+        self._enqueue(self._cmd_fade_all_backgrounds(target_db, frames, shape, stop_when_done))
+
+    def set_master_gain(self, db: float) -> None:
+        """Set the master device trim to ``db``, smoothed over ~50 ms."""
 
         def cmd() -> None:
-            voices = list(self._backgrounds.values())
-            self._backgrounds.clear()
-            if mode == "hard":
-                return
-            frames = max(1, seconds_to_frames(fade_seconds))
-            for voice in voices:
-                voice.begin_kill(frames)
-                self._dying.append(voice)
+            self._master_start = self._master_gain
+            self._master_target = float(db_to_gain(db))
+            self._master_ramp = self._master_smooth_frames
+
+        self._enqueue(cmd)
+
+    # =====================================================================
+    # Scheduled control API (chain fires) -- each lands block-atomically
+    # =====================================================================
+    def schedule_normal(
+        self,
+        cue_id: str,
+        pcm: np.ndarray,
+        start_in_frames: int,
+        *,
+        gain_db: float = 0.0,
+        fade_in: float = 0.0,
+        fade_out: float = 0.0,
+        fade_shape: str = "linear",
+        out_lo: int = 0,
+        out_mono: bool = False,
+    ) -> None:
+        """Fire a normal cue ``start_in_frames`` frames from now."""
+        voice = Voice(
+            pcm,
+            cue_id=cue_id,
+            gain_db=gain_db,
+            fade_in=fade_in,
+            fade_out=fade_out,
+            fade_shape=fade_shape,
+            loop=False,
+            out_lo=out_lo,
+            out_mono=out_mono,
+        )
+        sf = _ScheduledFire(
+            cue_id, start_in_frames, "normal", self._cmd_play_normal(voice)
+        )
+        self._enqueue(lambda: self._scheduled.append(sf))
+
+    def schedule_background(
+        self,
+        cue_id: str,
+        pcm: np.ndarray,
+        start_in_frames: int,
+        *,
+        gain_db: float = 0.0,
+        fade_in: float = 0.0,
+        loop: bool = False,
+        fade_shape: str = "linear",
+        out_lo: int = 0,
+        out_mono: bool = False,
+    ) -> None:
+        """Start a background cue ``start_in_frames`` frames from now."""
+        voice = Voice(
+            pcm,
+            cue_id=cue_id,
+            gain_db=gain_db,
+            fade_in=fade_in,
+            fade_out=0.0,
+            fade_shape=fade_shape,
+            loop=loop,
+            out_lo=out_lo,
+            out_mono=out_mono,
+        )
+        sf = _ScheduledFire(
+            cue_id, start_in_frames, "background", self._cmd_play_background(cue_id, voice)
+        )
+        self._enqueue(lambda: self._scheduled.append(sf))
+
+    def schedule_stop_all_backgrounds(
+        self,
+        cue_id: str,
+        start_in_frames: int,
+        *,
+        mode: str = "fade",
+        fade_seconds: float = 2.0,
+    ) -> None:
+        """Stop every background ``start_in_frames`` frames from now.
+
+        ``cue_id`` is the stop placement's own id -- the schedule key for
+        cancellation and the armed-cell display, not a stop target.
+        """
+        sf = _ScheduledFire(
+            cue_id, start_in_frames, "stop", self._cmd_stop_all_backgrounds(mode, fade_seconds)
+        )
+        self._enqueue(lambda: self._scheduled.append(sf))
+
+    def schedule_stop_background(
+        self,
+        cue_id: str,
+        target_id: str,
+        start_in_frames: int,
+        *,
+        mode: str = "fade",
+        fade_seconds: float = 2.0,
+    ) -> None:
+        """Stop the ``target_id`` background ``start_in_frames`` frames from now.
+
+        ``cue_id`` keys the pending fire (the stop placement's own id, for
+        cancellation/armed display); ``target_id`` is the background to stop.
+        A safe no-op if ``target_id`` is not a live background at activation.
+        """
+        sf = _ScheduledFire(
+            cue_id, start_in_frames, "stop", self._cmd_stop_background(target_id, mode, fade_seconds)
+        )
+        self._enqueue(lambda: self._scheduled.append(sf))
+
+    def schedule_fade(
+        self,
+        cue_id: str,
+        target: str,
+        start_in_frames: int,
+        target_db: float,
+        ramp_seconds: float,
+        *,
+        shape: str = "linear",
+        stop_when_done: bool = False,
+    ) -> None:
+        """Ramp gain ``start_in_frames`` frames from now.
+
+        ``cue_id`` is the fade placement's own id (the schedule key for
+        cancellation and the armed-cell display). ``target`` is either the
+        ``ALL_BACKGROUNDS`` sentinel (resolved to the live backgrounds AT
+        activation) or a specific voice key (a safe no-op if not live then).
+        """
+        frames = max(1, seconds_to_frames(ramp_seconds))
+        if target == ALL_BACKGROUNDS:
+            activate = self._cmd_fade_all_backgrounds(target_db, frames, shape, stop_when_done)
+        else:
+            activate = self._cmd_set_cue_gain(target, target_db, frames, shape, stop_when_done)
+        sf = _ScheduledFire(cue_id, start_in_frames, "fade", activate)
+        self._enqueue(lambda: self._scheduled.append(sf))
+
+    def cancel_scheduled(self, cue_id: str) -> None:
+        """Drop every pending fire keyed by ``cue_id``."""
+
+        def cmd() -> None:
+            self._scheduled = [sf for sf in self._scheduled if sf.cue_id != cue_id]
+
+        self._enqueue(cmd)
+
+    def cancel_all_scheduled(self) -> None:
+        """Drop every pending fire."""
+
+        def cmd() -> None:
+            self._scheduled = []
+
+        self._enqueue(cmd)
+
+    # =====================================================================
+    # Global pause / resume
+    # =====================================================================
+    def pause_all(self) -> None:
+        """Freeze all show voices (~10 ms declick) and freeze pending fires.
+
+        Audition and already-dying voices are not touched. A cue fired while
+        paused plays normally.
+        """
+
+        def cmd() -> None:
+            self._paused = True
+            if self._normal is not None:
+                self._normal.begin_pause(self._declick_frames)
+            for voice in self._backgrounds.values():
+                voice.begin_pause(self._declick_frames)
+
+        self._enqueue(cmd)
+
+    def resume_all(self) -> None:
+        """Un-freeze paused voices (~10 ms declick) and resume countdowns."""
+
+        def cmd() -> None:
+            self._paused = False
+            if self._normal is not None:
+                self._normal.begin_resume(self._declick_frames)
+            for voice in self._backgrounds.values():
+                voice.begin_resume(self._declick_frames)
 
         self._enqueue(cmd)
 
@@ -249,6 +595,9 @@ class AudioEngine:
                 self._audition.begin_kill(frames)
                 self._dying.append(self._audition)
                 self._audition = None
+            # Drop pending chain fires and lift any pause in the same command.
+            self._scheduled.clear()
+            self._paused = False
 
         self._enqueue(cmd)
 
@@ -261,6 +610,8 @@ class AudioEngine:
         fade_out: float = 0.0,
         fade_shape: str = "linear",
         loop: bool = False,
+        out_lo: int = 0,
+        out_mono: bool = False,
     ) -> None:
         """Play ``pcm`` on the separate audition channel (replaces any current
         audition; never touches show voices)."""
@@ -272,6 +623,8 @@ class AudioEngine:
             fade_out=fade_out,
             fade_shape=fade_shape,
             loop=loop,
+            out_lo=out_lo,
+            out_mono=out_mono,
         )
 
         def cmd() -> None:
@@ -310,6 +663,8 @@ class AudioEngine:
             if voice is not None:
                 voice.begin_kill(self._declick_frames)
                 self._dying.append(voice)
+            # Also drop any pending fire for this cue (deletion mid-wait).
+            self._scheduled = [sf for sf in self._scheduled if sf.cue_id != cue_id]
 
         self._enqueue(cmd)
 
@@ -317,36 +672,118 @@ class AudioEngine:
     # Mixing -- single source of truth
     # =====================================================================
     def render(self, num_frames: int) -> np.ndarray:
-        """Advance the mix by ``num_frames`` and return float32 (num_frames, 2)."""
+        """Advance the mix by ``num_frames`` and return float32
+        (num_frames, _bus_channels)."""
         num_frames = int(num_frames)
         if num_frames <= 0:
-            return np.zeros((0, CHANNELS), dtype=NP_DTYPE)
+            return np.zeros((0, self._bus_channels), dtype=NP_DTYPE)
 
         with self._lock:
             self._drain_locked()
 
-            acc = np.zeros((num_frames, CHANNELS), dtype=np.float64)
+            acc = np.zeros((num_frames, self._bus_channels), dtype=np.float64)
 
-            if self._normal is not None:
-                acc += self._normal.render(num_frames)
-            for voice in self._backgrounds.values():
-                acc += voice.render(num_frames)
-            if self._audition is not None:
-                acc += self._audition.render(num_frames)
-            for voice in self._dying:
-                acc += voice.render(num_frames)
+            if self._paused:
+                # Frozen: scheduled countdowns and activations do not advance.
+                # Voices render as usual -- paused ones emit silence and hold
+                # their playhead; a voice started while paused plays normally.
+                # Master trim still advances (it is the device trim; a settings
+                # change while paused still lands).
+                self._render_voices(acc, 0, num_frames)
+                self._cleanup_finished()
+                self._apply_master(acc, num_frames)
+                return _soft_limit(acc).astype(NP_DTYPE)
 
-            # Drop finished voices.
-            if self._normal is not None and self._normal.finished:
-                self._normal = None
-            for cue_id in [k for k, v in self._backgrounds.items() if v.finished]:
-                del self._backgrounds[cue_id]
-            if self._audition is not None and self._audition.finished:
-                self._audition = None
-            if self._dying:
-                self._dying = [v for v in self._dying if not v.finished]
+            # Split the block at each scheduled fire that lands inside it so the
+            # activation is sample-accurate. Render each segment, then fire at
+            # its trailing boundary; the newly-started voice renders from there.
+            boundaries = sorted(
+                {sf.remaining for sf in self._scheduled if 0 <= sf.remaining < num_frames}
+            )
+            cursor = 0
+            for b in boundaries + [num_frames]:
+                if b > cursor:
+                    self._render_voices(acc, cursor, b)
+                    cursor = b
+                if b < num_frames:
+                    for sf in [s for s in self._scheduled if s.remaining == b]:
+                        sf.activate()
+                    self._scheduled = [s for s in self._scheduled if s.remaining != b]
+
+            # Count down the fires that did not activate this block.
+            for sf in self._scheduled:
+                sf.remaining -= num_frames
+
+            self._cleanup_finished()
+            self._apply_master(acc, num_frames)
 
         return _soft_limit(acc).astype(NP_DTYPE)
+
+    def _apply_master(self, acc: np.ndarray, n: int) -> np.ndarray:
+        """Apply the smoothed master trim to the summed mix in place (pre-limit)."""
+        if self._master_ramp > 0:
+            total = self._master_smooth_frames
+            done = total - self._master_ramp
+            prog = np.clip((done + np.arange(n) + 1) / float(total), 0.0, 1.0)
+            g = self._master_start + (self._master_target - self._master_start) * prog
+            acc *= g[:, None]
+            advanced = min(n, self._master_ramp)
+            self._master_gain = float(self._master_start + (self._master_target - self._master_start)
+                                      * min(1.0, (done + advanced) / float(total)))
+            self._master_ramp = max(0, self._master_ramp - n)
+            if self._master_ramp == 0:
+                self._master_gain = self._master_target
+        elif self._master_gain != 1.0:
+            acc *= self._master_gain
+        return acc
+
+    def _render_voices(self, acc: np.ndarray, start: int, end: int) -> None:
+        """Render every active voice for the segment ``[start:end)`` into ``acc``."""
+        seg = end - start
+        if seg <= 0:
+            return
+        if self._normal is not None:
+            self._mix_voice(acc, start, end, self._normal.render(seg),
+                            self._normal.out_lo, self._normal.out_mono)
+        for voice in self._backgrounds.values():
+            self._mix_voice(acc, start, end, voice.render(seg), voice.out_lo, voice.out_mono)
+        if self._audition is not None:
+            self._mix_voice(acc, start, end, self._audition.render(seg),
+                            self._audition.out_lo, self._audition.out_mono)
+        for voice in self._dying:
+            self._mix_voice(acc, start, end, voice.render(seg), voice.out_lo, voice.out_mono)
+
+    def _mix_voice(self, acc, start, end, block, out_lo, out_mono) -> None:
+        """Scatter a voice's stereo ``block`` (seg, 2) into the wide bus.
+
+        Device mono (``self._mono_out``): collapse everything into the 2-wide bus.
+        Otherwise, a stereo voice lands in [out_lo:out_lo+2]; an ``out_mono`` voice
+        is mean-downmixed into the single column [out_lo]. A destination beyond the
+        bus width is dropped (silent), never an error.
+        """
+        if self._mono_out:
+            acc[start:end, 0:2] += block          # device mono: full-mix downmix
+            return
+        if out_mono:
+            col = int(out_lo)
+            if 0 <= col < self._bus_channels:
+                acc[start:end, col] += block.mean(axis=1)   # (seg,) broadcasts into the column
+            return
+        lo = int(out_lo)
+        if 0 <= lo and lo + 2 <= self._bus_channels:
+            acc[start:end, lo:lo + 2] += block
+        # else: beyond bus width -> dropped (silent). No error.
+
+    def _cleanup_finished(self) -> None:
+        """Drop voices whose envelope has run out."""
+        if self._normal is not None and self._normal.finished:
+            self._normal = None
+        for cue_id in [k for k, v in self._backgrounds.items() if v.finished]:
+            del self._backgrounds[cue_id]
+        if self._audition is not None and self._audition.finished:
+            self._audition = None
+        if self._dying:
+            self._dying = [v for v in self._dying if not v.finished]
 
     # =====================================================================
     # Status
@@ -388,6 +825,17 @@ class AudioEngine:
                 "audition": audition,
                 "audition_active": self._audition is not None,
                 "device_ok": bool(self.device_ok),
+                "output_channels": int(self._output_channels),
+                "bus_channels": int(self._bus_channels),
+                "paused": bool(self._paused),
+                "scheduled": [
+                    {
+                        "cue_id": sf.cue_id,
+                        "remaining_frames": int(max(0, sf.remaining)),
+                        "kind": sf.kind,
+                    }
+                    for sf in self._scheduled
+                ],
             }
 
     # =====================================================================
@@ -469,8 +917,8 @@ class AudioEngine:
         """Native (samplerate, channels) of the selected output device.
 
         Returns the device's real rate so the stream is opened to match its clock
-        (see :meth:`_open_stream`). Channels are clamped to the engine's stereo
-        mix: stereo when the device supports it, otherwise mono.
+        (see :meth:`_open_stream`), and the device's usable output width (1 for a
+        mono device, else capped at 32); the mix bus is opened to match.
         """
         index = self._device
         if index is None:
@@ -478,34 +926,46 @@ class AudioEngine:
         info = sd.query_devices(index)
         rate = int(round(info.get("default_samplerate", SAMPLE_RATE))) or SAMPLE_RATE
         max_out = int(info.get("max_output_channels", CHANNELS))
-        out_ch = CHANNELS if max_out >= CHANNELS else max(1, max_out)
+        out_ch = 1 if max_out <= 1 else min(32, max_out)
         return rate, out_ch
 
     def _setup_resampler(self, rate: int, out_ch: int) -> int:
         """Prepare the realtime resampler for ``rate``; return the rate to open at.
 
+        Derives the mix-bus width from ``out_ch`` (a mono device keeps a 2-wide
+        bus and outputs 1 channel; otherwise the bus matches the device width).
+        Channel mapping to the device happens AFTER resample in
+        :meth:`_to_output_channels`, so the resampler runs at the bus width.
+
         If the device rate matches the engine rate no resampler is needed. If a
         resampler is unavailable (soxr missing), fall back to opening at the engine
         rate so the stream still works (best effort, may play at wrong speed).
         """
-        self._output_channels = out_ch
-        self._resample_buf = np.zeros((0, CHANNELS), dtype=NP_DTYPE)
-        if rate == SAMPLE_RATE:
-            self._resampler = None
-            self._output_rate = SAMPLE_RATE
-            return SAMPLE_RATE
-        try:
-            import soxr
+        mono = out_ch <= 1
+        bus = 2 if mono else out_ch
+        # Build the resampler (if needed) BEFORE taking the lock; only the width
+        # field writes must be atomic vs. the audio callback (see AMENDMENT).
+        resampler = None
+        open_rate = SAMPLE_RATE
+        if rate != SAMPLE_RATE:
+            try:
+                import soxr
 
-            self._resampler = soxr.ResampleStream(
-                SAMPLE_RATE, rate, CHANNELS, dtype="float32", quality="HQ"
-            )
-            self._output_rate = rate
-            return rate
-        except Exception:
-            self._resampler = None
-            self._output_rate = SAMPLE_RATE
-            return SAMPLE_RATE
+                resampler = soxr.ResampleStream(
+                    SAMPLE_RATE, rate, bus, dtype="float32", quality="HQ"
+                )
+                open_rate = rate
+            except Exception:
+                resampler = None
+                open_rate = SAMPLE_RATE
+        with self._lock:
+            self._mono_out = mono
+            self._bus_channels = bus
+            self._output_channels = out_ch
+            self._resampler = resampler
+            self._output_rate = open_rate
+            self._resample_buf = np.zeros((0, self._bus_channels), dtype=NP_DTYPE)
+        return open_rate
 
     def _audio_callback(self, outdata, frames, time_info, status) -> None:
         import sounddevice as sd
@@ -543,12 +1003,16 @@ class AudioEngine:
         return self._to_output_channels(out)
 
     def _to_output_channels(self, block: np.ndarray) -> np.ndarray:
-        """Map a stereo mix block to the device's channel count."""
-        if self._output_channels == CHANNELS:
+        """Map a bus-width mix block (n, _bus_channels) to the device width."""
+        if self._mono_out:
+            return block.mean(axis=1, keepdims=True).astype(NP_DTYPE)   # (n,1) full-bus mean
+        if self._output_channels == self._bus_channels:
             return block
-        if self._output_channels == 1:
-            return block.mean(axis=1, keepdims=True).astype(NP_DTYPE)
-        return block
+        if self._output_channels > self._bus_channels:                  # defensive zero-pad
+            out = np.zeros((block.shape[0], self._output_channels), dtype=NP_DTYPE)
+            out[:, :self._bus_channels] = block
+            return out
+        return block[:, :self._output_channels]                          # defensive narrow
 
     def _on_stream_finished(self) -> None:
         # Called when the stream stops. If we did not ask for it, the device was

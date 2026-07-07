@@ -3,6 +3,7 @@
 """Audio engine package: real-time numpy mixer, voices, envelopes, output."""
 
 from cueforge.engine.audio_engine import AudioEngine
+from cueforge.engine.hub import EngineHub
 from cueforge.engine.voice import Voice
 
-__all__ = ["AudioEngine", "Voice"]
+__all__ = ["AudioEngine", "EngineHub", "Voice"]
