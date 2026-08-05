@@ -6,7 +6,7 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20development-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/lesani)
 
 **➜ [lesani.github.io/CueForge](https://lesani.github.io/CueForge/)** — project
-website, with a live cue grid you can click through in the browser. No install.
+website: what CueForge does, screenshots, and downloads.
 
 A reliable, server-side **audio cue system for amateur and small-scale
 productions** — amateur theatre, community stages, dance, school and church
