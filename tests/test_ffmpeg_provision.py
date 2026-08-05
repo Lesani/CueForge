@@ -1,11 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Lesani. See LICENSE for details.
 """Tests for ffmpeg provisioning: cache-dir resolution, version parsing, and
-the download/extract pipeline (network faked -- no real HTTP)."""
+the download/extract pipeline (network faked -- no real HTTP).
+
+The two publishers ship different archive shapes -- gyan.dev a ``.zip`` for
+Windows, BtbN a ``.tar.xz`` for Linux -- and the extractor picks between them by
+sniffing the file rather than by the running platform, so both are exercised on
+every machine.
+"""
 
 import hashlib
 import io
 import os
+import tarfile
 import zipfile
 
 import pytest
@@ -22,10 +29,16 @@ def _reset_provision_state(monkeypatch):
         phase="idle", percent=0, downloaded=0, total=0, version=None, error=None
     )
     ffmpeg_util._update_info.update(installed=None, latest=None, checked=False)
+    ffmpeg_util._btbn_branch_cache.clear()
     ffmpeg_util.resolve_ffmpeg.cache_clear()
     monkeypatch.delenv("CUEFORGE_FFMPEG", raising=False)
     yield
+    ffmpeg_util._btbn_branch_cache.clear()
     ffmpeg_util.resolve_ffmpeg.cache_clear()
+
+
+def _ext() -> str:
+    return ".exe" if os.name == "nt" else ""
 
 
 def _make_release_zip() -> bytes:
@@ -38,8 +51,32 @@ def _make_release_zip() -> bytes:
     return buf.getvalue()
 
 
-def _ext() -> str:
-    return ".exe" if os.name == "nt" else ""
+def _make_release_tarxz() -> bytes:
+    """A BtbN-shaped release tarball: binaries nested under <build>/bin/."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:xz") as tf:
+        for rel, data in (
+            ("bin/ffmpeg" + _ext(), b"FFMPEG-BIN"),
+            ("bin/ffprobe" + _ext(), b"FFPROBE-BIN"),
+            ("bin/ffplay" + _ext(), b"not something we shell out to"),
+            ("README.txt", b"docs, ignored"),
+            # A same-named file outside bin/ must not be mistaken for the real
+            # binary -- the "/bin/" prefix is what disambiguates it.
+            ("ffmpeg" + _ext(), b"DECOY"),
+        ):
+            info = tarfile.TarInfo("ffmpeg-n8.1-latest-linux64-gpl-8.1/" + rel)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def _release_archive(kind: str) -> bytes:
+    return _make_release_zip() if kind == "zip" else _make_release_tarxz()
+
+
+#: Both archive shapes, so extract/download tests run against each regardless
+#: of which platform the suite happens to be running on.
+ARCHIVE_KINDS = ("zip", "tar.xz")
 
 
 class _FakeResponse:
@@ -131,20 +168,94 @@ def test_installed_version_none_on_failure(monkeypatch):
     assert ffmpeg_util.installed_version("/fake/ffmpeg") is None
 
 
+def test_installed_version_parses_the_btbn_build_string(monkeypatch):
+    # BtbN prefixes the tag with "n" and appends commit/date, so the numeric
+    # part has to be searched for rather than matched at the start.
+    class _Proc:
+        stdout = "ffmpeg version n8.1.2-34-g9b6c8969e0-20260804 Copyright (c) 2000-2026"
+
+    monkeypatch.setattr(ffmpeg_util.subprocess, "run", lambda *a, **k: _Proc())
+    assert ffmpeg_util.installed_version("/fake/ffmpeg") == "8.1.2"
+
+
+# ---------------------------------------------------------------- source
+
+def test_btbn_asset_name_per_arch():
+    assert ffmpeg_util._btbn_asset_name("8.1", "x86_64") == (
+        "ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"
+    )
+    assert ffmpeg_util._btbn_asset_name("8.1", "aarch64") == (
+        "ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz"
+    )
+
+
+def test_btbn_picks_the_newest_branch(monkeypatch):
+    # Numeric, not lexicographic: "8.10" outranks "8.9", and the rolling
+    # master-latest assets are ignored because their version is a build number.
+    names = [
+        "ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz",
+        "ffmpeg-n8.9-latest-linux64-gpl-8.9.tar.xz",
+        "ffmpeg-n8.10-latest-linux64-gpl-8.10.tar.xz",
+        "ffmpeg-master-latest-linux64-gpl.tar.xz",
+        "ffmpeg-n9.0-latest-linuxarm64-gpl-9.0.tar.xz",   # other arch
+        "ffmpeg-n8.1-latest-win64-gpl.zip",               # other platform
+    ]
+    monkeypatch.setattr(
+        ffmpeg_util, "_btbn_branches",
+        lambda arch: ["8.9", "8.10", "7.1"] if arch == "x86_64" else [],
+    )
+    assert ffmpeg_util._btbn_latest_branch("x86_64") == "8.10"
+    # Sanity-check the asset regex the real lookup filters with.
+    matched = [n for n in names if ffmpeg_util._BTBN_ASSET_RE.match(n)]
+    assert "ffmpeg-master-latest-linux64-gpl.tar.xz" not in matched
+    assert "ffmpeg-n8.1-latest-win64-gpl.zip" not in matched
+
+
+def test_btbn_falls_back_when_the_listing_is_unreachable(monkeypatch):
+    monkeypatch.setattr(ffmpeg_util, "_btbn_branches", lambda arch: [])
+    assert ffmpeg_util._btbn_latest_branch("x86_64") == ffmpeg_util._BTBN_FALLBACK_BRANCH
+    # A failed lookup must not be cached, or the fallback sticks for the
+    # lifetime of the process even once the network comes back.
+    assert "x86_64" not in ffmpeg_util._btbn_branch_cache
+
+
+def test_btbn_rejects_an_unsupported_arch(monkeypatch):
+    monkeypatch.setattr(ffmpeg_util, "arch_tag", lambda: "riscv64")
+    with pytest.raises(RuntimeError, match="riscv64"):
+        ffmpeg_util._btbn_source()
+
+
 # ---------------------------------------------------------------- extract
 
-def test_extract_pulls_bin_only(tmp_path):
-    zip_bytes = _make_release_zip()
-    zip_path = tmp_path / "ff.zip"
-    zip_path.write_bytes(zip_bytes)
+@pytest.mark.parametrize("kind", ARCHIVE_KINDS)
+def test_extract_pulls_bin_only(tmp_path, kind):
+    archive = tmp_path / "ff.archive"
+    archive.write_bytes(_release_archive(kind))
     dest = tmp_path / "out"
     dest.mkdir()
 
-    ffmpeg_util._extract_binaries(str(zip_path), str(dest))
+    ffmpeg_util._extract_binaries(str(archive), str(dest))
 
     assert (dest / ffmpeg_util._EXE).read_bytes() == b"FFMPEG-BIN"
     assert (dest / ffmpeg_util._PROBE).read_bytes() == b"FFPROBE-BIN"
     assert not (dest / "README.txt").exists()
+    # Everything else in the build is discarded, decoys included.
+    assert sorted(p.name for p in dest.iterdir()) == sorted(
+        [ffmpeg_util._EXE, ffmpeg_util._PROBE]
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes only")
+@pytest.mark.parametrize("kind", ARCHIVE_KINDS)
+def test_extract_marks_binaries_executable(tmp_path, kind):
+    # Neither archive carries a usable mode, and we exec what we extract.
+    archive = tmp_path / "ff.archive"
+    archive.write_bytes(_release_archive(kind))
+
+    ffmpeg_util._extract_binaries(str(archive), str(tmp_path))
+
+    assert os.access(tmp_path / ffmpeg_util._EXE, os.X_OK)
+    assert os.access(tmp_path / ffmpeg_util._PROBE, os.X_OK)
 
 
 def test_extract_raises_without_ffmpeg(tmp_path):
@@ -158,49 +269,125 @@ def test_extract_raises_without_ffmpeg(tmp_path):
         ffmpeg_util._extract_binaries(str(zip_path), str(tmp_path))
 
 
+def test_extract_rejects_a_non_archive(tmp_path):
+    # e.g. an HTML error page served where the release asset was expected.
+    bad = tmp_path / "oops.bin"
+    bad.write_bytes(b"<html>504 Gateway Timeout</html>" * 8)
+
+    with pytest.raises(RuntimeError, match="neither a zip nor a tar"):
+        ffmpeg_util._extract_binaries(str(bad), str(tmp_path))
+
+
 # ---------------------------------------------------------------- download
 
-def test_download_ffmpeg_end_to_end(tmp_path, monkeypatch):
-    zip_bytes = _make_release_zip()
+def _fake_source(archive_bytes: bytes, monkeypatch, *, sums_key=None):
+    """Point download_ffmpeg at a fixed in-memory archive, whatever the host OS.
+
+    Returns the digest the publisher would advertise for it, so callers can
+    serve a matching (or deliberately mismatched) checksum body.
+    """
+    source = ffmpeg_util.Source(
+        url="https://example.test/ffmpeg-archive",
+        sums_url="https://example.test/sums",
+        sums_key=sums_key,
+    )
+    monkeypatch.setattr(ffmpeg_util, "_source", lambda: source)
+    monkeypatch.setattr(
+        ffmpeg_util.urllib.request,
+        "urlopen",
+        lambda *a, **k: _FakeResponse(archive_bytes),
+    )
+    return hashlib.sha256(archive_bytes).hexdigest()
+
+
+@pytest.mark.parametrize("kind", ARCHIVE_KINDS)
+def test_download_ffmpeg_end_to_end(tmp_path, monkeypatch, kind):
+    archive = _release_archive(kind)
     cache = tmp_path / "bin"
     monkeypatch.setattr(ffmpeg_util, "CACHE_DIR", str(cache))
-    monkeypatch.setattr(
-        ffmpeg_util.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(zip_bytes)
-    )
+    digest = _fake_source(archive, monkeypatch)
     # Correct checksum -> passes verification.
-    monkeypatch.setattr(
-        ffmpeg_util, "_fetch_text", lambda url: hashlib.sha256(zip_bytes).hexdigest()
-    )
+    monkeypatch.setattr(ffmpeg_util, "_fetch_text", lambda url: digest)
 
     seen = []
     path = ffmpeg_util.download_ffmpeg(lambda d, t: seen.append((d, t)))
 
     assert path == str(cache / ffmpeg_util._EXE)
     assert os.path.isfile(path)
-    assert seen and seen[-1][0] == len(zip_bytes)          # progress reached 100%
-    assert not (cache / (ffmpeg_util._ZIP_NAME + ".part")).exists()  # temp cleaned
+    assert seen and seen[-1][0] == len(archive)            # progress reached 100%
+    assert not (cache / ffmpeg_util._ARCHIVE_PART).exists()  # temp cleaned
 
 
-def test_download_rejects_bad_checksum(tmp_path, monkeypatch):
-    zip_bytes = _make_release_zip()
+@pytest.mark.parametrize("kind", ARCHIVE_KINDS)
+def test_download_rejects_bad_checksum(tmp_path, monkeypatch, kind):
+    archive = _release_archive(kind)
     cache = tmp_path / "bin"
     monkeypatch.setattr(ffmpeg_util, "CACHE_DIR", str(cache))
-    monkeypatch.setattr(
-        ffmpeg_util.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(zip_bytes)
-    )
-    monkeypatch.setattr(ffmpeg_util, "_fetch_text", lambda url: "deadbeef")
+    _fake_source(archive, monkeypatch)
+    monkeypatch.setattr(ffmpeg_util, "_fetch_text", lambda url: "de" * 32)
 
     with pytest.raises(RuntimeError, match="checksum"):
         ffmpeg_util.download_ffmpeg()
     assert not (cache / ffmpeg_util._EXE).exists()
+    assert not (cache / ffmpeg_util._ARCHIVE_PART).exists()
+
+
+def test_download_rejects_listing_without_our_asset(tmp_path, monkeypatch):
+    # BtbN serves one listing for every asset in the release. Reaching it but
+    # not finding our line means something is wrong with the release -- that
+    # must not silently degrade into an unverified install.
+    archive = _make_release_tarxz()
+    cache = tmp_path / "bin"
+    monkeypatch.setattr(ffmpeg_util, "CACHE_DIR", str(cache))
+    _fake_source(archive, monkeypatch, sums_key="ffmpeg-n9.9-latest-linux64-gpl-9.9.tar.xz")
+    monkeypatch.setattr(
+        ffmpeg_util, "_fetch_text",
+        lambda url: f"{'ab' * 32}  some-other-asset.tar.xz\n",
+    )
+
+    with pytest.raises(RuntimeError, match="unverified"):
+        ffmpeg_util.download_ffmpeg()
+    assert not (cache / ffmpeg_util._EXE).exists()
+
+
+def test_download_selects_our_line_from_a_multi_asset_listing(tmp_path, monkeypatch):
+    archive = _make_release_tarxz()
+    cache = tmp_path / "bin"
+    monkeypatch.setattr(ffmpeg_util, "CACHE_DIR", str(cache))
+    ours = "ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"
+    digest = _fake_source(archive, monkeypatch, sums_key=ours)
+    monkeypatch.setattr(
+        ffmpeg_util, "_fetch_text",
+        lambda url: (
+            f"{'11' * 32}  ffmpeg-n8.1-latest-win64-gpl.zip\n"
+            f"{digest}  {ours}\n"
+            f"{'22' * 32}  ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz\n"
+        ),
+    )
+
+    assert ffmpeg_util.download_ffmpeg() == str(cache / ffmpeg_util._EXE)
+
+
+def test_download_tolerates_an_unreachable_checksum_endpoint(tmp_path, monkeypatch):
+    # Long-standing behaviour: a checksum host that is briefly down must not
+    # block a first run, so the download proceeds unverified.
+    archive = _make_release_zip()
+    cache = tmp_path / "bin"
+    monkeypatch.setattr(ffmpeg_util, "CACHE_DIR", str(cache))
+    _fake_source(archive, monkeypatch)
+    monkeypatch.setattr(ffmpeg_util, "_fetch_text", lambda url: None)
+
+    assert ffmpeg_util.download_ffmpeg() == str(cache / ffmpeg_util._EXE)
 
 
 def test_cleanup_partials_removes_orphans(tmp_path, monkeypatch):
     cache = tmp_path / "bin"
     cache.mkdir()
     monkeypatch.setattr(ffmpeg_util, "CACHE_DIR", str(cache))
-    orphan = cache / (ffmpeg_util._ZIP_NAME + ".part")
+    orphan = cache / ffmpeg_util._ARCHIVE_PART
     orphan.write_bytes(b"partial")
+    legacy = cache / (ffmpeg_util._GYAN_ZIP_NAME + ".part")  # named by <= 0.2.0
+    legacy.write_bytes(b"partial")
     extract_orphan = cache / (ffmpeg_util._EXE + ".part")
     extract_orphan.write_bytes(b"partial")
     keep = cache / ffmpeg_util._EXE          # a real (finished) binary must survive
@@ -298,3 +485,26 @@ def test_update_available_logic():
     assert ffmpeg_util.update_available() is True            # newer available
     assert ffmpeg_util.update_available(dismissed="8.2.0") is False  # dismissed
     assert ffmpeg_util.update_available(dismissed="8.1.9") is True    # stale dismiss
+
+
+def test_update_available_compares_a_branch_against_a_patch_release():
+    # On Linux the two sides are different shapes: "latest" is the newest
+    # release branch BtbN publishes, "installed" is the full build version. A
+    # patch ahead of its own branch is up to date, not an available update --
+    # an equality check here would nag on every startup forever.
+    info = ffmpeg_util._update_info
+
+    info.update(installed="8.1.2", latest="8.1")
+    assert ffmpeg_util.update_available() is False
+
+    info.update(installed="8.1", latest="8.1")
+    assert ffmpeg_util.update_available() is False
+
+    # A genuinely newer branch still registers.
+    info.update(installed="8.1.2", latest="8.2")
+    assert ffmpeg_util.update_available() is True
+
+    # And a source that somehow reports older than what is installed does not
+    # offer a "downgrade update".
+    info.update(installed="8.2.0", latest="8.1")
+    assert ffmpeg_util.update_available() is False

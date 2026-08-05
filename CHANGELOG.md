@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2026-08-05]
+
+### Added
+- Linux support, alongside Windows. Releases now carry a prebuilt
+  `CueForge-linux-x86_64` and `CueForge-linux-aarch64` (Raspberry Pi 4/5)
+  next to `CueForge.exe`, each self-contained apart from the C library and
+  ALSA. Built against glibc 2.35, so Ubuntu 22.04+, Debian 12+ and Fedora 36+.
+- ffmpeg auto-provisioning on Linux: the `gpl` static build is fetched from
+  [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) (the variant that
+  carries `libmp3lame`, which MP3 export needs) and verified against the
+  release's `checksums.sha256`, mirroring what gyan.dev provides on Windows.
+- `cueforge/platform_util.py`: one place deciding the executable suffix,
+  normalised CPU architecture, and release asset names, so the ffmpeg resolver,
+  the yt-dlp resolver, the self-updater and `build_exe.py` cannot drift apart.
+- `build.sh`, the `build.bat` counterpart.
+
+### Changed
+- The self-updater picks the release asset matching the platform it is running
+  on instead of always `CueForge.exe`, and marks the download executable before
+  the swap. Windows keeps its existing asset name, so builds already in the
+  field keep updating.
+- ffmpeg "update available" is now a numeric version comparison rather than a
+  string inequality. On Linux the published version is a release branch ("8.1")
+  while the installed build is a patch ("8.1.2"), which an equality check read
+  as a permanent available update; it also stops a source that reports *older*
+  than what is installed from offering a downgrade.
+- The release workflow builds a three-target matrix and publishes one combined
+  `SHA256SUMS.txt` covering every platform's binary.
+- Refreshed logo and icons throughout the app, installer icon and website.
+- README leads with the logo and a nav row (website, downloads, changelog,
+  contributing), and documents per-platform downloads and running from source.
+- Project website offers the Linux binaries alongside the Windows one and no
+  longer presents CueForge as Windows-only.
+
+### Fixed
+- yt-dlp on Linux downloaded the `yt-dlp` zipapp, which needs a system Python 3
+  the frozen build cannot assume exists; it now fetches the standalone
+  `yt-dlp_linux` / `yt-dlp_linux_aarch64` binary.
+- A checksum listing that is served but does not name the asset being fetched
+  no longer silently degrades into installing an unverified ffmpeg. An
+  unreachable checksum host is still tolerated, as before.
+- The website kept serving the previous logo after the icons were regenerated:
+  its copies under `site/assets/` were maintained by hand, and are now written
+  by `scripts/make_icons.py` along with the app's.
+- `CUEFORGE_YTDLP` is documented in the README; it worked but was never
+  written down.
+
 ## [2026-07-07]
 
 ### Added

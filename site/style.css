@@ -46,6 +46,8 @@ pre {
   overflow-x: auto;
 }
 pre code { background: none; border: none; padding: 0; font-size: 13px; }
+/* Comment lines inside a code block, dimmed so the commands stay dominant. */
+pre code .cmt { color: var(--muted); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 h1, h2, h3 { font-family: var(--display); line-height: 1.1; margin: 0 0 0.5em; }
@@ -338,7 +340,9 @@ h3 { font-size: 19px; font-weight: 600; }
 
 .dl-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* Fits the three download cards side by side on a desktop and reflows to
+     two, then one, without needing a breakpoint per card count. */
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 18px;
   margin-top: 26px;
 }

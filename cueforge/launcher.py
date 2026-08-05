@@ -26,6 +26,7 @@ import sys
 import webbrowser
 
 from cueforge import __version__, ffmpeg_util, update_util, ytdlp_util
+from cueforge.platform_util import IS_WINDOWS
 
 BANNER_WIDTH = 60          # minimum rule width; the layout may be wider
 
@@ -52,7 +53,7 @@ def _configure_console_utf8() -> None:
     older ones (where the always-printed URL + PIN and the in-app QR are the
     fallback).
     """
-    if os.name == "nt":
+    if IS_WINDOWS:
         try:
             os.system("chcp 65001 >nul 2>&1")
         except Exception:
@@ -67,10 +68,11 @@ def _enable_vt() -> bool:
     """Enable ANSI escape processing; True if in-place redraws are possible.
 
     Windows Terminal has VT on by default but legacy conhost needs
-    ENABLE_VIRTUAL_TERMINAL_PROCESSING. Returns False for pipes/redirects
-    (GetConsoleMode fails / not a tty) so VT codes never leak into logs.
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING; every Linux terminal already has it.
+    Returns False for pipes/redirects (GetConsoleMode fails / not a tty) so VT
+    codes never leak into logs.
     """
-    if os.name != "nt":
+    if not IS_WINDOWS:
         try:
             return sys.stdout.isatty()
         except Exception:
@@ -303,7 +305,7 @@ def _start_dashboard_thread(state, port: int, ctx: dict, vt: bool) -> None:
                     "mem": f"{mem_mb:.0f} MB" if mem_mb is not None else "n/a",
                 }
                 _draw_screen(ctx, stats, vt)
-                if os.name == "nt" and proc is not None:
+                if IS_WINDOWS and proc is not None:
                     try:
                         import ctypes
 

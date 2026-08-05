@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cueforge"
-version = "0.2.0"
+version = "0.3.0"
 description = "Server-side, browser-controlled audio cue system for theater and live productions"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,6 +19,7 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Sound/Audio :: Players",
 ]

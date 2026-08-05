@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CueForge — audio cues for the small stage</title>
-  <meta name="description" content="CueForge is a free, open-source audio cue player for amateur theatre, schools, churches and small venues. Run the server on the booth PC, control the show from any browser." />
+  <meta name="description" content="CueForge is a free, open-source audio cue player for amateur theatre, schools, churches and small venues. Runs on Windows and Linux: start the server on the booth machine, control the show from any browser." />
   <meta name="theme-color" content="#131519" />
   <link rel="icon" type="image/png" href="assets/icon-192.png" />
   <link rel="apple-touch-icon" href="assets/icon-192.png" />
@@ -38,7 +38,7 @@
   <!-- ============================================================ hero -->
   <section class="hero">
     <div class="hero-copy">
-      <p class="eyebrow">Open source &middot; AGPL-3.0 &middot; Windows</p>
+      <p class="eyebrow">Open source &middot; AGPL-3.0 &middot; Windows &amp; Linux</p>
       <h1>Press GO.<br />That&rsquo;s the whole job.</h1>
       <p class="lede">
         CueForge is a free, open-source <strong>audio cue player for amateur and
@@ -47,10 +47,10 @@
         from any browser on the network — laptop, tablet, or phone.
       </p>
       <div class="cta-row">
-        <a class="btn btn-go" href="https://github.com/Lesani/CueForge/releases/latest" rel="noopener">Download for Windows</a>
+        <a class="btn btn-go" href="#download">Download</a>
         <a class="btn btn-ghost" href="https://github.com/Lesani/CueForge" rel="noopener">View on GitHub</a>
       </div>
-      <p class="cta-note">One <code>CueForge.exe</code>, no install. Prints a URL, PIN and QR code, and opens the console in your browser.</p>
+      <p class="cta-note">One file for Windows or Linux, no install. Prints a URL, PIN and QR code, and opens the console in your browser.</p>
     </div>
 
     <!-- signature: a working miniature of the playing view -->
@@ -169,12 +169,29 @@
         <a class="btn btn-go" href="https://github.com/Lesani/CueForge/releases/latest" rel="noopener">Download latest release</a>
       </div>
       <div class="dl-card">
+        <h3>Linux</h3>
+        <p>A single self-contained binary for Intel/AMD
+           (<code>CueForge-linux-x86_64</code>) or ARM, including a Raspberry Pi
+           4/5 (<code>CueForge-linux-aarch64</code>). Mark it executable and run
+           it; it self-updates the same way.</p>
+<pre><code>chmod +x CueForge-linux-x86_64
+./CueForge-linux-x86_64</code></pre>
+        <a class="btn btn-go" href="https://github.com/Lesani/CueForge/releases/latest" rel="noopener">Download latest release</a>
+      </div>
+      <div class="dl-card">
         <h3>From source</h3>
         <p>Requires Python 3.13. ffmpeg and yt-dlp are downloaded
-           automatically on first use.</p>
+           automatically on first use. On Linux, install PortAudio first
+           (<code>libportaudio2</code> on Debian/Ubuntu).</p>
 <pre><code>python -m venv .venv
+
+<span class="cmt"># Windows</span>
 .venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe -m cueforge</code></pre>
+.venv/Scripts/python.exe -m cueforge
+
+<span class="cmt"># Linux</span>
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m cueforge</code></pre>
       </div>
     </div>
   </section>

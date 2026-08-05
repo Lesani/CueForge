@@ -26,16 +26,36 @@ import threading
 import urllib.request
 from functools import lru_cache
 
-_EXE = "yt-dlp.exe" if os.name == "nt" else "yt-dlp"
+from cueforge.platform_util import EXE_SUFFIX, IS_WINDOWS, arch_tag, make_executable
+
+_EXE = "yt-dlp" + EXE_SUFFIX
 
 # Downloaded binaries share the server's writable home dir (mirrors
 # cueforge.ffmpeg_util.CACHE_DIR) -- kept local so this module stays standalone.
 _HOME_DIR = os.path.join(os.path.expanduser("~"), "CueForge")
 CACHE_DIR = os.path.join(_HOME_DIR, "bin")
 
-# GitHub serves a permanent "latest" redirect to the single-file build.
-_ASSET = "yt-dlp.exe" if os.name == "nt" else "yt-dlp"
-DOWNLOAD_URL = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{_ASSET}"
+# GitHub serves a permanent "latest" redirect to each single-file build. Pick
+# the standalone binary for this platform: the bare ``yt-dlp`` asset is the
+# zipapp, which needs a system Python 3 -- fine from source, but not something
+# the frozen build can assume is installed on a booth machine.
+_ASSETS = {
+    "windows-x86_64": "yt-dlp.exe",
+    "windows-aarch64": "yt-dlp_arm64.exe",
+    "linux-x86_64": "yt-dlp_linux",
+    "linux-aarch64": "yt-dlp_linux_aarch64",
+}
+
+
+def _asset_name() -> str:
+    """Release asset matching this platform; the zipapp as a last resort."""
+    system = "windows" if IS_WINDOWS else "linux"
+    return _ASSETS.get(f"{system}-{arch_tag()}", "yt-dlp")
+
+
+def download_url() -> str:
+    """Permanent "latest release" URL for this platform's yt-dlp build."""
+    return f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{_asset_name()}"
 
 _HTTP_TIMEOUT = 30  # per-read socket timeout (seconds)
 _CHUNK = 1024 * 256
@@ -101,7 +121,7 @@ def download_ytdlp(progress_cb=None) -> str:
     os.makedirs(CACHE_DIR, exist_ok=True)
     dest = os.path.join(CACHE_DIR, _EXE)
     tmp = dest + ".part"
-    req = urllib.request.Request(DOWNLOAD_URL, headers={"User-Agent": "CueForge"})
+    req = urllib.request.Request(download_url(), headers={"User-Agent": "CueForge"})
     with _download_lock:
         # A concurrent caller may have finished the download while we waited on
         # the lock -- don't re-fetch (and don't touch its freshly-written file).
@@ -122,8 +142,7 @@ def download_ytdlp(progress_cb=None) -> str:
                         if progress_cb:
                             progress_cb(downloaded, total)
             os.replace(tmp, dest)
-            if os.name != "nt":
-                os.chmod(dest, 0o755)
+            make_executable(dest)
         except BaseException:
             try:
                 os.remove(tmp)

@@ -1,12 +1,26 @@
-# CueForge
+<p align="center">
+  <img src="assets/Logo.png" alt="" width="160">
+</p>
 
-[![Website](https://img.shields.io/badge/website-lesani.github.io%2FCueForge-2ea44f)](https://lesani.github.io/CueForge/)
-[![Latest release](https://img.shields.io/github/v/release/Lesani/CueForge?label=download)](https://github.com/Lesani/CueForge/releases/latest)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20development-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/lesani)
+<h1 align="center">CueForge</h1>
 
-**➜ [lesani.github.io/CueForge](https://lesani.github.io/CueForge/)** — project
-website: what CueForge does, screenshots, and downloads.
+<p align="center"><em>Audio cues for the small stage.</em></p>
+
+<p align="center">
+  <a href="https://lesani.github.io/CueForge/"><img src="https://img.shields.io/badge/website-lesani.github.io%2FCueForge-2ea44f" alt="Website"></a>
+  <a href="https://github.com/Lesani/CueForge/releases/latest"><img src="https://img.shields.io/github/v/release/Lesani/CueForge?label=download" alt="Latest release"></a>
+  <a href="https://github.com/Lesani/CueForge/releases/latest"><img src="https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-informational" alt="Platforms: Windows and Linux"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License: AGPL-3.0"></a>
+  <a href="https://ko-fi.com/lesani"><img src="https://img.shields.io/badge/Ko--fi-support%20development-FF5E5B?logo=ko-fi&logoColor=white" alt="Ko-fi"></a>
+</p>
+
+<p align="center">
+  <a href="https://lesani.github.io/CueForge/"><b>Website</b></a> ·
+  <a href="#download"><b>Download</b></a> ·
+  <a href="#quick-start-from-source"><b>Run from source</b></a> ·
+  <a href="CHANGELOG.md"><b>Changelog</b></a> ·
+  <a href="CONTRIBUTING.md"><b>Contributing</b></a>
+</p>
 
 A reliable, server-side **audio cue system for amateur and small-scale
 productions** — amateur theatre, community stages, dance, school and church
@@ -41,12 +55,30 @@ CueForge is for you.
 
 ![CueForge playing view — cue running with progress, looping background bed, stop cues](assets/screenshot-playing-live.png)
 
-## Download (Windows)
+## Download
 
-Grab the prebuilt `CueForge.exe` from the
+Grab the prebuilt binary for your machine from the
 [latest release](https://github.com/Lesani/CueForge/releases/latest) — no
 install needed, just run it. It prints a URL, PIN, and a scannable QR code, and
 opens the control UI in your browser.
+
+| Platform | File |
+|---|---|
+| Windows | `CueForge.exe` |
+| Linux (Intel/AMD 64-bit) | `CueForge-linux-x86_64` |
+| Linux (ARM 64-bit, e.g. Raspberry Pi 4/5) | `CueForge-linux-aarch64` |
+
+On Linux, mark it executable first — release downloads never carry that bit:
+
+```sh
+chmod +x CueForge-linux-x86_64
+./CueForge-linux-x86_64
+```
+
+The Linux builds bundle everything they need except the C library and ALSA,
+both present on any normal desktop or server install. They are built against
+glibc 2.35, so they run on Ubuntu 22.04+, Debian 12+, Fedora 36+ and anything
+newer. On an older distro, run from source instead.
 
 CueForge keeps itself current: it checks GitHub for new releases (Settings →
 Application, can be turned off) and updates itself with one click — download,
@@ -93,17 +125,35 @@ Running from source instead? See [Quick start](#quick-start-from-source) below.
 - **Audio:** a NumPy real-time mixer over `sounddevice` (PortAudio); `soundfile`
   (libsndfile/FLAC); `ffmpeg` for decoding on import.
 - **Frontend:** vanilla JavaScript ES modules + canvas — **no build step**.
-- **Packaging:** PyInstaller (onefile) into a single `CueForge.exe`.
+- **Packaging:** PyInstaller (onefile) into a single binary per platform.
+- **Platforms:** Windows and Linux (x86_64 and aarch64).
 
 ## Quick start (from source)
 
 Requires Python 3.13. `ffmpeg` and `yt-dlp` are **not** needed up front —
 CueForge downloads its own copies on first use.
 
+On Linux, install PortAudio first — `sounddevice` publishes no wheel that
+carries it, so it has to come from your package manager:
+
+```sh
+sudo apt install libportaudio2     # Debian/Ubuntu
+sudo dnf install portaudio         # Fedora
+sudo pacman -S portaudio           # Arch
+```
+
+Then, on either platform:
+
 ```sh
 python -m venv .venv
+
+# Windows
 .venv/Scripts/python.exe -m pip install -r requirements.txt
 .venv/Scripts/python.exe -m cueforge
+
+# Linux
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m cueforge
 ```
 
 Then open the printed URL (default http://localhost:7070/). Press **F11** for
@@ -113,7 +163,8 @@ Want something to click on right away? Generate the demo show from the
 screenshots (synthesized audio, no downloads):
 
 ```sh
-.venv/Scripts/python.exe scripts/make_demo_show.py
+.venv/Scripts/python.exe scripts/make_demo_show.py   # Windows
+.venv/bin/python scripts/make_demo_show.py           # Linux
 ```
 
 and open the **Demo** project from Settings → Saved projects.
@@ -121,25 +172,38 @@ and open the **Demo** project from Settings → Saved projects.
 Environment overrides:
 
 - `CUEFORGE_PORT` — listen port (default `7070`)
-- `CUEFORGE_NO_BROWSER=1` — don't auto-open a browser
-- `CUEFORGE_FFMPEG` — path to an ffmpeg binary
+- `CUEFORGE_NO_BROWSER=1` — don't auto-open a browser (useful on a headless
+  booth machine, where there is no browser to open)
+- `CUEFORGE_FFMPEG` — path to an ffmpeg binary, instead of the downloaded one
+- `CUEFORGE_YTDLP` — path to a yt-dlp binary, instead of the downloaded one
 
 ## Data location
 
-Per-user data lives under `~/CueForge`:
+Per-user data lives under `~/CueForge` (`C:\Users\you\CueForge` on Windows,
+`/home/you/CueForge` on Linux):
 
 - `config.json` — output device, master trim, PIN, port, update preference
 - `projects/*.cueforge` — saved shows
 - `work/` — extracted working folders for open projects
 - `bin/` — auto-downloaded ffmpeg / yt-dlp
 
+A show is fully portable between platforms: the `.cueforge` file holds
+`show.json` plus decoded audio, so a show built on Windows opens on Linux and
+back. Only the **Outputs** are venue-specific — re-point them at the local
+devices in **Settings → Audio outputs** on the new machine.
+
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev
-environment, project layout, tests, building the executable, and how to open a
-pull request. When proposing features, keep the project's focus in mind:
-CueForge stays small and approachable — features that mainly serve large,
-complex productions are usually a better fit for other tools.
+environment, project layout, tests, building the binary, and how to open a
+pull request. The WebSocket/REST protocol is documented in
+[`cueforge/server/PROTOCOL.md`](cueforge/server/PROTOCOL.md), and the
+architectural decisions behind the engine, cue model and packaging are recorded
+as [ADRs](docs/adr/). Release history lives in [CHANGELOG.md](CHANGELOG.md).
+
+When proposing features, keep the project's focus in mind: CueForge stays small
+and approachable — features that mainly serve large, complex productions are
+usually a better fit for other tools.
 
 If CueForge is useful to you and you'd like to support its development, you can
 [buy me a coffee on Ko-fi](https://ko-fi.com/lesani). ♥
@@ -151,9 +215,13 @@ uvicorn, NumPy, sounddevice/PortAudio, soundfile/libsndfile, soxr, qrcode,
 Pillow, and others — each under its own license). In addition, two external
 tools are **downloaded on first use** rather than bundled with this repository:
 
-- **[ffmpeg](https://ffmpeg.org/)** — used to decode imported audio. The
-  auto-downloaded Windows build comes from [gyan.dev](https://www.gyan.dev/ffmpeg/)
-  and is licensed under the GPL/LGPL. Not distributed as part of this project.
+- **[ffmpeg](https://ffmpeg.org/)** — used to decode imported audio and to
+  encode exports. The auto-downloaded build comes from
+  [gyan.dev](https://www.gyan.dev/ffmpeg/) on Windows and from
+  [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) on Linux (the
+  `gpl` static build, which is the variant that carries the `libmp3lame`
+  encoder the MP3 export needs). Licensed under the GPL/LGPL. Not distributed
+  as part of this project.
 - **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** — used for the optional YouTube
   import feature. Released into the public domain (Unlicense). Not distributed as
   part of this project.

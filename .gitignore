@@ -19,11 +19,16 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# Bundled ffmpeg binary (kept local; downloaded from gyan.dev if absent)
-vendor/ffmpeg/*.exe
+# Bundled ffmpeg binary (kept local; downloaded from the platform's publisher
+# if absent). No extension on Linux, hence the bare glob.
+vendor/ffmpeg/*
 
 # Bundled yt-dlp binary (kept local; yt-dlp on PATH is the fallback)
-vendor/yt-dlp/*.exe
+vendor/yt-dlp/*
+
+# PyInstaller spec regenerated per platform by build_exe.py (the Windows-named
+# CueForge.spec is tracked; the per-platform ones are pure build output)
+/CueForge-linux-*.spec
 
 # CueForge working/runtime files
 *.cueforge

@@ -13,6 +13,7 @@ generator so no HTTP client (httpx) dependency is needed.
 from __future__ import annotations
 
 import os
+import tempfile
 
 import anyio
 import numpy as np
@@ -78,6 +79,65 @@ def test_resolve_ytdlp_prefers_cache(tmp_path, monkeypatch):
     ytdlp_util.resolve_ytdlp.cache_clear()
     try:
         assert ytdlp_util.resolve_ytdlp() == str(fake)
+    finally:
+        ytdlp_util.resolve_ytdlp.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "system, machine, expected",
+    [
+        ("windows", "AMD64", "yt-dlp.exe"),
+        ("windows", "arm64", "yt-dlp_arm64.exe"),
+        # NOT the bare "yt-dlp" asset: that one is the zipapp, which needs a
+        # system Python 3 the frozen build cannot assume is installed.
+        ("linux", "x86_64", "yt-dlp_linux"),
+        ("linux", "aarch64", "yt-dlp_linux_aarch64"),
+    ],
+)
+def test_asset_name_per_platform(monkeypatch, system, machine, expected):
+    monkeypatch.setattr(ytdlp_util, "IS_WINDOWS", system == "windows")
+    monkeypatch.setattr(ytdlp_util, "arch_tag", lambda: {"AMD64": "x86_64",
+                                                         "arm64": "aarch64"}.get(machine, machine))
+    assert ytdlp_util._asset_name() == expected
+    assert ytdlp_util.download_url().endswith(f"/download/{expected}")
+
+
+def test_asset_name_falls_back_to_the_zipapp(monkeypatch):
+    # An architecture yt-dlp publishes no standalone build for still gets the
+    # portable zipapp rather than a URL that 404s.
+    monkeypatch.setattr(ytdlp_util, "IS_WINDOWS", False)
+    monkeypatch.setattr(ytdlp_util, "arch_tag", lambda: "riscv64")
+    assert ytdlp_util._asset_name() == "yt-dlp"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes only")
+def test_download_ytdlp_marks_it_executable(tmp_path, monkeypatch):
+    import io
+
+    cache = tmp_path / "bin"
+    monkeypatch.setattr(ytdlp_util, "CACHE_DIR", str(cache))
+
+    class _Resp:
+        def __init__(self, data):
+            self._buf = io.BytesIO(data)
+            self.headers = {"Content-Length": str(len(data))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            return self._buf.read(n)
+
+    monkeypatch.setattr(
+        ytdlp_util.urllib.request, "urlopen", lambda *a, **k: _Resp(b"YTDLP-BIN")
+    )
+    ytdlp_util.resolve_ytdlp.cache_clear()
+    try:
+        path = ytdlp_util.download_ytdlp()
+        assert os.access(path, os.X_OK)
     finally:
         ytdlp_util.resolve_ytdlp.cache_clear()
 
@@ -159,9 +219,24 @@ def test_cleanup_partials_removes_orphan(tmp_path, monkeypatch):
 # ---------------------------------------------------------------- helpers
 
 def _fake_download_factory(seconds=0.5, title="My Video"):
+    """A stand-in for youtube.download_audio that delivers fixed bytes.
+
+    The tone is rendered ONCE and the same bytes replayed on every call, which
+    is what the dedup test means by "the same download". Re-rendering per call
+    is not equivalent: libsndfile stamps the current time (whole seconds) into
+    the WAV's PEAK chunk, so two renders that straddle a second boundary differ
+    by one byte -- a real content change that import_audio correctly reports as
+    a new item, failing the duplicate test roughly one run in twenty.
+    """
+    with tempfile.TemporaryDirectory() as staging:
+        source = write_tone_wav(os.path.join(staging, "tone.wav"), seconds=seconds)
+        with open(source, "rb") as fh:
+            payload = fh.read()
+
     async def fake_download(url, dest_dir):
         path = os.path.join(dest_dir, "vid.wav")
-        write_tone_wav(path, seconds=seconds)
+        with open(path, "wb") as fh:
+            fh.write(payload)
         yield {"type": "progress", "percent": 0.0}
         yield {"type": "progress", "percent": 50.0}
         yield {"type": "done", "path": path, "title": title}

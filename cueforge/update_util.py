@@ -8,15 +8,18 @@ Checking: :func:`check_now` asks the GitHub API for the latest release of
 (gated on the ``checkForUpdates`` setting) so ``/api/update/status`` can answer
 without ever blocking on the network.
 
-Applying (frozen builds only): the release's ``CueForge.exe`` asset is
-downloaded next to the running exe as ``CueForge.exe.new`` and verified against
-the release's ``SHA256SUMS.txt``. Then a rename-swap: Windows locks a running
-exe against delete/write but NOT rename, so the running file is renamed to
-``CueForge.exe.old`` and the download takes its place -- no helper process or
-batch script. The worker then asks the server to shut down gracefully; the
-launcher sees :func:`restart_pending` after the server loop exits (port
-already free) and spawns the new exe. Leftover ``.old``/``.new`` files are
-swept on the next startups.
+Applying (frozen builds only): the release asset matching this platform (see
+:func:`cueforge.platform_util.release_asset_name`) is downloaded next to the
+running executable as ``<name>.new`` and verified against the release's
+``SHA256SUMS.txt``, which covers every platform's asset in one file. Then a
+rename-swap: a running executable cannot be overwritten in place -- Windows
+locks it against delete/write, and Linux answers ``ETXTBSY`` -- but *renaming*
+it is allowed on both, so the running file is renamed to ``<name>.old`` and the
+download takes its place. No helper process or batch script. The worker then
+asks the server to shut down gracefully; the launcher sees
+:func:`restart_pending` after the server loop exits (port already free) and
+spawns the new build. Leftover ``.old``/``.new`` files are swept on the next
+startups.
 """
 
 from __future__ import annotations
@@ -32,10 +35,13 @@ import time
 import urllib.request
 
 from cueforge import __version__
+from cueforge.platform_util import IS_WINDOWS, make_executable, release_asset_name
 
 GITHUB_REPO = "Lesani/CueForge"
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-ASSET_NAME = "CueForge.exe"
+#: Release asset this build updates itself from -- one release carries the
+#: assets for every supported platform, so each build must pick its own.
+ASSET_NAME = release_asset_name()
 CHECKSUMS_NAME = "SHA256SUMS.txt"
 
 CHECK_INTERVAL = 12 * 3600  # periodic re-check cadence (seconds)
@@ -252,11 +258,12 @@ def _download(url: str, dest: str, expected_size: int = 0) -> str:
 
 
 def _swap_exe(exe_path: str, new_path: str) -> None:
-    """Rename-swap the running exe for the downloaded one.
+    """Rename-swap the running executable for the downloaded one.
 
-    Windows locks a running exe against delete/overwrite but allows renaming
-    it, so: current -> ``.old``, download -> current. On any failure the
-    original is renamed back so the installation stays runnable.
+    Neither platform lets a running image be overwritten in place (Windows
+    locks it; Linux raises ``ETXTBSY``), but both allow renaming it, so:
+    current -> ``.old``, download -> current. On any failure the original is
+    renamed back so the installation stays runnable.
     """
     old_path = exe_path + ".old"
     try:
@@ -291,6 +298,9 @@ def _apply_worker(request_shutdown) -> None:
         digest = _download(info["assetUrl"], new_path, info.get("assetSize") or 0)
         if digest.lower() != expected:
             raise RuntimeError("update download failed checksum verification")
+        # GitHub serves release assets without a mode; the swapped-in file has
+        # to be executable before it becomes the installed build.
+        make_executable(new_path)
         _swap_exe(exe, new_path)
         _restart_pending = True
         _apply_state.update(phase="restarting", percent=100, error=None)
@@ -326,7 +336,7 @@ def start_apply(request_shutdown) -> bool:
 
 
 def spawn_replacement() -> None:
-    """Launch the freshly installed exe. Called by the launcher AFTER the
+    """Launch the freshly installed build. Called by the launcher AFTER the
     server loop exits (so the port is already free). The operator's browser
     tab reloads itself, so the new instance must not open another one."""
     exe = _exe_path()
@@ -340,8 +350,16 @@ def spawn_replacement() -> None:
     for var in [k for k in env if k.startswith("_PYI_")] + ["_MEIPASS2"]:
         env.pop(var, None)
     kwargs: dict = {}
-    if os.name == "nt":
+    if IS_WINDOWS:
+        # Give it its own console; this process's window closes behind us.
         kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+    else:
+        # No new terminal to hand it on Linux, so it keeps this one's stdio and
+        # goes into its own session -- otherwise a SIGHUP or Ctrl+C aimed at the
+        # exiting shell job would take the replacement down with it. The console
+        # dashboard then redraws over the shell prompt, which is why we say so.
+        kwargs["start_new_session"] = True
+        print(f"\nCueForge updated -- restarting {os.path.basename(exe)}...", flush=True)
     try:
         subprocess.Popen(
             [exe], cwd=os.path.dirname(exe) or None, env=env,

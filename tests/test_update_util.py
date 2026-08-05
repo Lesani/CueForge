@@ -48,15 +48,28 @@ class TestVersionCompare:
 # --------------------------------------------------------------------------
 # _extract_release
 # --------------------------------------------------------------------------
+# One release carries every platform's build, so the asset this process looks
+# for depends on where it is running.
+OUR_ASSET = update_util.ASSET_NAME
+
+#: Every asset a release publishes, in the shape the GitHub API returns.
+ALL_ASSETS = [
+    {
+        "name": name,
+        "browser_download_url": f"https://example.test/{name}",
+        "size": size,
+    }
+    for name, size in (
+        ("CueForge.exe", 12345),
+        ("CueForge-linux-x86_64", 23456),
+        ("CueForge-linux-aarch64", 34567),
+    )
+]
+
 SAMPLE_RELEASE = {
     "tag_name": "v0.2.0",
     "html_url": "https://github.com/Lesani/CueForge/releases/tag/v0.2.0",
-    "assets": [
-        {
-            "name": "CueForge.exe",
-            "browser_download_url": "https://example.test/CueForge.exe",
-            "size": 12345,
-        },
+    "assets": ALL_ASSETS + [
         {
             "name": "SHA256SUMS.txt",
             "browser_download_url": "https://example.test/SHA256SUMS.txt",
@@ -71,9 +84,20 @@ class TestExtractRelease:
         info = update_util._extract_release(SAMPLE_RELEASE)
         assert info["latest"] == "0.2.0"
         assert info["url"].endswith("/v0.2.0")
-        assert info["assetUrl"] == "https://example.test/CueForge.exe"
-        assert info["assetSize"] == 12345
         assert info["checksumsUrl"] == "https://example.test/SHA256SUMS.txt"
+
+    def test_picks_the_asset_for_this_platform(self):
+        # The build must ignore the other platforms' assets in the same release.
+        info = update_util._extract_release(SAMPLE_RELEASE)
+        assert info["assetUrl"] == f"https://example.test/{OUR_ASSET}"
+        expected_size = next(a["size"] for a in ALL_ASSETS if a["name"] == OUR_ASSET)
+        assert info["assetSize"] == expected_size
+
+    def test_release_without_our_platforms_asset(self):
+        others = [a for a in SAMPLE_RELEASE["assets"] if a["name"] != OUR_ASSET]
+        info = update_util._extract_release({"tag_name": "v0.3.0", "assets": others})
+        assert info["latest"] == "0.3.0"
+        assert info["assetUrl"] is None
 
     def test_release_without_assets(self):
         info = update_util._extract_release({"tag_name": "v0.3.0", "assets": []})
