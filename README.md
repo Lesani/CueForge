@@ -1,8 +1,12 @@
 # CueForge
 
+[![Website](https://img.shields.io/badge/website-lesani.github.io%2FCueForge-2ea44f)](https://lesani.github.io/CueForge/)
 [![Latest release](https://img.shields.io/github/v/release/Lesani/CueForge?label=download)](https://github.com/Lesani/CueForge/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20development-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/lesani)
+
+**➜ [lesani.github.io/CueForge](https://lesani.github.io/CueForge/)** — project
+website, with a live cue grid you can click through in the browser. No install.
 
 A reliable, server-side **audio cue system for amateur and small-scale
 productions** — amateur theatre, community stages, dance, school and church
